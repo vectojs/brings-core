@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose a renderer-independent Core capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-api
+    attributes:
+      label: Proposed public API and invariants
+      description: Explain why the capability does not belong solely in a browser adapter.
+    validations:
+      required: true

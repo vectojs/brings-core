@@ -130,13 +130,12 @@ export function cloneDocumentContent(document: BringsDocument): DocumentContent 
   return cloneContent(document);
 }
 
-/** Return the only currently valid structural selection value. */
+/** Return an empty structural selection. */
 export function emptyStructuralSelection(): StructuralSelection {
   return { nodeIds: [], activeNodeId: null };
 }
 
 /** Return a detached structural selection snapshot. */
 export function cloneStructuralSelection(selection: StructuralSelection): StructuralSelection {
-  void selection;
-  return emptyStructuralSelection();
+  return { nodeIds: [...selection.nodeIds], activeNodeId: selection.activeNodeId };
 }

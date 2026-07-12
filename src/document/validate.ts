@@ -751,6 +751,40 @@ export function validateDocument(value: unknown): Result<BringsDocument> {
   return success({ id: id.value, revision: revision.value, ...content });
 }
 
+/**
+ * Validate an insertion forest without allocating identity or depending on a
+ * document page. The returned order is the required detached preorder.
+ */
+export function validateDetachedSubtree(
+  value: unknown,
+  rootIdValue: string,
+): Result<readonly SceneNode[]> {
+  const rootId = readUuid(rootIdValue, '/rootId');
+  if (!rootId.ok) return rootId;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_NODES) {
+    return failure('nodes.limit', '/nodes');
+  }
+  const textBytes = { value: 0 };
+  const nodes: SceneNode[] = [];
+  const nodeIds = new Set<string>();
+  for (let index = 0; index < value.length; index += 1) {
+    const node = readNode(value[index], pathAt('/nodes', index), textBytes);
+    if (!node.ok) return node;
+    if (nodeIds.has(node.value.id))
+      return failure('id.duplicate', pathAt(pathAt('/nodes', index), 'id'));
+    nodeIds.add(node.value.id);
+    nodes.push(node.value);
+  }
+  const root = nodes.find((node) => node.id === rootId.value);
+  if (root === undefined || root.parentId !== null) return failure('node.root', '/rootId');
+  const topology = validateTopology(
+    [{ id: rootId.value as PageId, name: 'Detached root', rootNodeIds: [rootId.value as NodeId] }],
+    nodes,
+  );
+  if (!topology.ok) return topology;
+  return success(nodes);
+}
+
 /** Create a detached revision-zero document from caller-provided identities. */
 export function createDocument(input: CreateDocumentInput): Result<BringsDocument> {
   const record = readRecord(input, '');

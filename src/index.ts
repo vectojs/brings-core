@@ -23,6 +23,7 @@ export type {
   Result,
   SceneNode,
   SceneNodeInput,
+  SelectionInput,
   SolidPaint,
   SolidPaintInput,
   Stroke,

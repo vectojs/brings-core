@@ -248,10 +248,16 @@ export type CreateDocumentInput = Readonly<{
   }>;
 }>;
 
-/** The deliberately empty selection representation used before geometry exists. */
+/** Ephemeral normalized node selection for the current active page. */
 export type StructuralSelection = Readonly<{
-  nodeIds: readonly [];
-  activeNodeId: null;
+  nodeIds: readonly NodeId[];
+  activeNodeId: NodeId | null;
+}>;
+
+/** Raw caller input for one ephemeral selection update. */
+export type SelectionInput = Readonly<{
+  nodeIds: readonly string[];
+  activeNodeId: string | null;
 }>;
 
 /** Explicit mutable fields for the first Frame creation command. */

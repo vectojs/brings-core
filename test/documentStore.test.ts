@@ -140,6 +140,109 @@ test('records Frame and nested Rectangle creation as independent undoable intent
   ]);
 });
 
+test('normalizes ephemeral selection without changing durable state or history', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  const before = store.snapshot();
+  const selectionStore = store as unknown as {
+    setSelection(input: { nodeIds: readonly string[]; activeNodeId: string | null }): unknown;
+  };
+
+  expect(
+    selectionStore.setSelection({
+      nodeIds: [ids.rectangle, ids.frame, ids.rectangle],
+      activeNodeId: ids.rectangle,
+    }),
+  ).toMatchObject({
+    ok: true,
+    value: { selection: { nodeIds: [ids.frame], activeNodeId: ids.frame } },
+  });
+  expect(store.snapshot()).toMatchObject({
+    document: { revision: before.document.revision },
+    undoDepth: before.undoDepth,
+    redoDepth: before.redoDepth,
+  });
+});
+
+test('rejects invalid selection atomically', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  const selectionStore = store as unknown as {
+    setSelection(input: { nodeIds: readonly string[]; activeNodeId: string | null }): unknown;
+  };
+  expect(selectionStore.setSelection({ nodeIds: ['not-a-uuid'], activeNodeId: null })).toEqual({
+    ok: false,
+    error: { code: 'id.invalid', path: '/nodeIds/0' },
+  });
+  expect(store.snapshot().selection).toEqual({ nodeIds: [], activeNodeId: null });
+});
+
+test('rejects locked, hidden, and inactive-page selection targets', () => {
+  const selectionStore = (store: ReturnType<typeof createStore>) =>
+    store as unknown as {
+      setSelection(input: { nodeIds: readonly string[]; activeNodeId: string | null }): unknown;
+    };
+  const lockedStore = createStore();
+  const lockedFrame = {
+    ...insertFrame,
+    nodes: [{ ...insertFrame.nodes[0], locked: true }, insertFrame.nodes[1]],
+  };
+  expect(lockedStore.execute(lockedFrame).ok).toBe(true);
+  expect(
+    selectionStore(lockedStore).setSelection({ nodeIds: [ids.frame], activeNodeId: ids.frame }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'selection.ineligible', path: '/nodeIds/0' },
+  });
+
+  const hiddenStore = createStore();
+  const hiddenFrame = {
+    ...insertFrame,
+    nodes: [insertFrame.nodes[0], { ...insertFrame.nodes[1], visible: false }],
+  };
+  expect(hiddenStore.execute(hiddenFrame).ok).toBe(true);
+  expect(
+    selectionStore(hiddenStore).setSelection({
+      nodeIds: [ids.rectangle],
+      activeNodeId: ids.rectangle,
+    }),
+  ).toEqual({ ok: false, error: { code: 'selection.ineligible', path: '/nodeIds/0' } });
+
+  const crossPageStore = createStore();
+  expect(crossPageStore.execute(insertFrame).ok).toBe(true);
+  expect(
+    crossPageStore.execute({ kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }).ok,
+  ).toBe(true);
+  expect(
+    selectionStore(crossPageStore).setSelection({ nodeIds: [ids.frame], activeNodeId: ids.frame }),
+  ).toEqual({ ok: false, error: { code: 'selection.page-mismatch', path: '/nodeIds/0' } });
+});
+
+test('restores captured ephemeral selection when undoing a durable command', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  const selectionStore = store as unknown as {
+    setSelection(input: { nodeIds: readonly string[]; activeNodeId: string | null }): unknown;
+  };
+  expect(
+    selectionStore.setSelection({ nodeIds: [ids.rectangle], activeNodeId: ids.rectangle }),
+  ).toMatchObject({
+    ok: true,
+    value: { selection: { nodeIds: [ids.rectangle], activeNodeId: ids.rectangle } },
+  });
+  expect(store.execute({ kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }).ok).toBe(
+    true,
+  );
+  expect(store.snapshot().selection).toEqual({ nodeIds: [], activeNodeId: null });
+  expect(store.undo().ok).toBe(true);
+  expect({
+    nodeIds: store.snapshot().selection.nodeIds.map((nodeId) => nodeId as string),
+    activeNodeId: store.snapshot().selection.activeNodeId as string | null,
+  }).toEqual({ nodeIds: [ids.rectangle], activeNodeId: ids.rectangle });
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot().selection).toEqual({ nodeIds: [], activeNodeId: null });
+});
+
 test('preserves stacks for empty history and failed execution', () => {
   const store = createStore();
   const initial = JSON.stringify(store.snapshot());

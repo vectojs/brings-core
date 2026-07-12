@@ -328,6 +328,60 @@ function insertSubtree(
   return commitCandidate(before, withPagesAndNodes(before, before.pages, nodes));
 }
 
+function createFrame(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'create-frame' }>,
+): Result<DocumentContent> {
+  const frame = {
+    ...command.frame,
+    type: 'frame' as const,
+    parentId: null,
+    childIds: [],
+    transform: [...command.frame.transform],
+    cornerRadii: [...command.frame.cornerRadii],
+    background: command.frame.background === null ? null : { ...command.frame.background },
+    stroke:
+      command.frame.stroke === null
+        ? null
+        : { paint: { ...command.frame.stroke.paint }, width: command.frame.stroke.width },
+  };
+  return insertSubtree(before, {
+    kind: 'insert-subtree',
+    pageId: command.pageId,
+    parentId: command.parentId,
+    index: command.index,
+    rootId: command.frame.id,
+    nodes: [frame],
+  });
+}
+
+function createRectangle(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'create-rectangle' }>,
+): Result<DocumentContent> {
+  const rectangle = {
+    ...command.rectangle,
+    id: command.rectangle.id,
+    type: 'rectangle' as const,
+    parentId: null,
+    transform: [...command.rectangle.transform],
+    cornerRadii: [...command.rectangle.cornerRadii],
+    fill: command.rectangle.fill === null ? null : { ...command.rectangle.fill },
+    stroke:
+      command.rectangle.stroke === null
+        ? null
+        : { paint: { ...command.rectangle.stroke.paint }, width: command.rectangle.stroke.width },
+  };
+  return insertSubtree(before, {
+    kind: 'insert-subtree',
+    pageId: command.pageId,
+    parentId: command.parentId,
+    index: command.index,
+    rootId: command.rectangle.id,
+    nodes: [rectangle],
+  });
+}
+
 function deleteNode(
   before: BringsDocument,
   command: Extract<DocumentCommandInput, { kind: 'delete-node' }>,
@@ -386,6 +440,10 @@ export function planCommand(
       return deletePage(before, command);
     case 'activate-page':
       return activatePage(before, command);
+    case 'create-frame':
+      return createFrame(before, command);
+    case 'create-rectangle':
+      return createRectangle(before, command);
     case 'insert-subtree':
       return insertSubtree(before, command);
     case 'delete-node':

@@ -81,6 +81,92 @@ function frameCommand(pageId: string = ids.page1) {
   };
 }
 
+function createFrameCommand() {
+  return {
+    kind: 'create-frame' as const,
+    pageId: ids.page1,
+    parentId: null,
+    index: 0,
+    frame: {
+      id: ids.frame,
+      name: 'Frame',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 40, 60],
+      width: 400,
+      height: 300,
+      cornerRadii: [0, 0, 0, 0],
+      background: null,
+      stroke: null,
+      clipChildren: false,
+    },
+  };
+}
+
+function createRectangleCommand(parentId: string = ids.frame) {
+  return {
+    kind: 'create-rectangle' as const,
+    pageId: ids.page1,
+    parentId,
+    index: 0,
+    rectangle: {
+      id: ids.rectangle,
+      name: 'Rectangle',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 20, 20],
+      width: 120,
+      height: 80,
+      cornerRadii: [0, 0, 0, 0],
+      fill: { type: 'solid' as const, r: 0, g: 0.5, b: 1, a: 1 },
+      stroke: null,
+    },
+  };
+}
+
+test('creates an empty Frame then a nested Rectangle through intention-level commands', () => {
+  const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
+  const afterFrame = documentFromContent(initialDocument(), frame, 1);
+  const rectangle = planCommand(afterFrame, createRectangleCommand() as never);
+
+  expect(rectangle).toMatchObject({
+    ok: true,
+    value: {
+      pages: [{ rootNodeIds: [ids.frame] }],
+      nodes: [
+        { id: ids.frame, type: 'frame', childIds: [ids.rectangle] },
+        { id: ids.rectangle, type: 'rectangle', parentId: ids.frame },
+      ],
+    },
+  });
+});
+
+test('keeps creation failures atomic for locked destinations and malformed geometry', () => {
+  const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
+  const afterFrame = documentFromContent(initialDocument(), frame, 1);
+  const locked = {
+    ...afterFrame,
+    nodes: afterFrame.nodes.map((node) =>
+      node.id === ids.frame ? { ...node, locked: true } : node,
+    ),
+  } as BringsDocument;
+  const lockedResult = planCommand(locked, createRectangleCommand() as never);
+  expect(lockedResult).toEqual({
+    ok: false,
+    error: { code: 'node.locked', path: '/nodes/0/locked' },
+  });
+
+  const malformed = createFrameCommand();
+  malformed.frame.width = 0;
+  const malformedResult = planCommand(initialDocument(), malformed as never);
+  expect(malformedResult).toMatchObject({
+    ok: false,
+    error: { code: 'number.range', path: '/nodes/0/width' },
+  });
+});
+
 test('creates an empty page, activates it, and preserves the old page', () => {
   const before = initialDocument();
   const result = planCommand(before, {

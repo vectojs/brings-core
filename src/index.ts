@@ -5,6 +5,8 @@ export type {
   BringsDocument,
   BringsDocumentInput,
   BringsError,
+  CreateFrameInput,
+  CreateRectangleInput,
   CommonNode,
   CreateDocumentInput,
   DocumentCommandInput,

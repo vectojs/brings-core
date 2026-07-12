@@ -1,5 +1,6 @@
 export { BRINGS_SCHEMA_VERSION, isOpaqueId, type OpaqueId } from './schema';
 export { createDocument, validateDocument } from './document/validate';
+export { createDocumentStore } from './document/store';
 export type {
   BringsDocument,
   BringsDocumentInput,
@@ -28,3 +29,4 @@ export type {
   TextNode,
   UUID,
 } from './document/types';
+export type { BringsDocumentStore, EditorSnapshot } from './document/store';

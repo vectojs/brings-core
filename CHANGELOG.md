@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 44c18cc: Add normalized ephemeral selection state with detached snapshots and history restoration.
+
 ## 0.3.0
 
 ### Minor Changes

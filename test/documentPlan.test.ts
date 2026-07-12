@@ -116,6 +116,10 @@ test('inserts a detached Frame with a nested Rectangle without retaining caller 
 
 test('enforces page index and no-change contracts', () => {
   const before = initialDocument();
+  expect(planCommand(before, null as unknown as never)).toEqual({
+    ok: false,
+    error: { code: 'command.invalid', path: '/' },
+  });
   expect(
     planCommand(before, {
       kind: 'create-page',

@@ -372,26 +372,25 @@ export function planCommand(
   before: BringsDocument,
   command: DocumentCommandInput,
 ): Result<DocumentContent> {
-  const detachedBefore = cloneContent(before);
-  const document = {
-    id: before.id,
-    revision: before.revision,
-    ...detachedBefore,
-  } as BringsDocument;
+  if (typeof command !== 'object' || command === null || Array.isArray(command)) {
+    return failure('command.invalid', '/');
+  }
   switch (command.kind) {
     case 'create-page':
-      return insertPage(document, command);
+      return insertPage(before, command);
     case 'rename-page':
-      return renamePage(document, command);
+      return renamePage(before, command);
     case 'reorder-page':
-      return reorderPage(document, command);
+      return reorderPage(before, command);
     case 'delete-page':
-      return deletePage(document, command);
+      return deletePage(before, command);
     case 'activate-page':
-      return activatePage(document, command);
+      return activatePage(before, command);
     case 'insert-subtree':
-      return insertSubtree(document, command);
+      return insertSubtree(before, command);
     case 'delete-node':
-      return deleteNode(document, command);
+      return deleteNode(before, command);
+    default:
+      return failure('command.kind', '/kind');
   }
 }

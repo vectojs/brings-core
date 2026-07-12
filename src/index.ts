@@ -1,6 +1,7 @@
 export { BRINGS_SCHEMA_VERSION, isOpaqueId, type OpaqueId } from './schema';
 export { createDocument, validateDocument } from './document/validate';
 export { createDocumentStore } from './document/store';
+export { hitTestPage, type PagePoint } from './geometry/hit';
 export type {
   BringsDocument,
   BringsDocumentInput,

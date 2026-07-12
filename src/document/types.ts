@@ -254,6 +254,12 @@ export type StructuralSelection = Readonly<{
   activeNodeId: null;
 }>;
 
+/** Explicit mutable fields for the first Frame creation command. */
+export type CreateFrameInput = Omit<FrameNodeInput, 'type' | 'parentId' | 'childIds'>;
+
+/** Explicit mutable fields for the first Rectangle creation command. */
+export type CreateRectangleInput = Omit<RectangleNodeInput, 'type' | 'parentId'>;
+
 /** The initial narrow command vocabulary for the document tracer. */
 export type DocumentCommandInput =
   | Readonly<{ kind: 'create-page'; id: string; name: string; index: number }>
@@ -261,6 +267,20 @@ export type DocumentCommandInput =
   | Readonly<{ kind: 'reorder-page'; pageId: string; index: number }>
   | Readonly<{ kind: 'delete-page'; pageId: string }>
   | Readonly<{ kind: 'activate-page'; pageId: string }>
+  | Readonly<{
+      kind: 'create-frame';
+      pageId: string;
+      parentId: string | null;
+      index: number;
+      frame: CreateFrameInput;
+    }>
+  | Readonly<{
+      kind: 'create-rectangle';
+      pageId: string;
+      parentId: string | null;
+      index: number;
+      rectangle: CreateRectangleInput;
+    }>
   | Readonly<{
       kind: 'insert-subtree';
       pageId: string;

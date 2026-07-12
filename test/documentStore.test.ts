@@ -82,6 +82,64 @@ test('executes, undoes, and redoes with identity preservation and monotonic revi
   expect(store.snapshot().document.id).toBe(initial.document.id);
 });
 
+test('records Frame and nested Rectangle creation as independent undoable intentions', () => {
+  const store = createStore();
+  expect(
+    store.execute({
+      kind: 'create-frame',
+      pageId: ids.page1,
+      parentId: null,
+      index: 0,
+      frame: {
+        id: ids.frame,
+        name: 'Frame',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        transform: [1, 0, 0, 1, 0, 0],
+        width: 400,
+        height: 300,
+        cornerRadii: [0, 0, 0, 0],
+        background: null,
+        stroke: null,
+        clipChildren: false,
+      },
+    }).ok,
+  ).toBe(true);
+  expect(
+    store.execute({
+      kind: 'create-rectangle',
+      pageId: ids.page1,
+      parentId: ids.frame,
+      index: 0,
+      rectangle: {
+        id: ids.rectangle,
+        name: 'Rectangle',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        transform: [1, 0, 0, 1, 20, 20],
+        width: 120,
+        height: 80,
+        cornerRadii: [0, 0, 0, 0],
+        fill: { type: 'solid', r: 0, g: 0.5, b: 1, a: 1 },
+        stroke: null,
+      },
+    }).ok,
+  ).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: { revision: 2, nodes: [{ childIds: [ids.rectangle] }, { id: ids.rectangle }] },
+    undoDepth: 2,
+  });
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({ document: { nodes: [{ childIds: [] }] }, undoDepth: 1 });
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot().document.nodes.map((node) => node.id as string)).toEqual([
+    ids.frame,
+    ids.rectangle,
+  ]);
+});
+
 test('preserves stacks for empty history and failed execution', () => {
   const store = createStore();
   const initial = JSON.stringify(store.snapshot());

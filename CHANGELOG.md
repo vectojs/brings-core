@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 0432f80: Add validated, undoable Frame and Rectangle creation commands for the first Brings editor interactions.
+
 ## 0.2.1
 
 ### Patch Changes

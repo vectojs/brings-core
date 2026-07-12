@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- b84120e: Add renderer-free page-space Frame and Rectangle hit testing for Core-owned selection.
+
 ## 0.4.0
 
 ### Minor Changes

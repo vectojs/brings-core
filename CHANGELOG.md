@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- a95734e: Add the DOM-free schema-v1 document tracer with strict graph validation, page
+  and detached-subtree commands, and atomic monotonic undo/redo history.
+
 All notable changes to this project will be documented in this file.
 
 ## Unreleased

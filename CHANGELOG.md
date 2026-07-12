@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Patch Changes
+
+- 8568a0c: Correct the published ESM and CommonJS entry points and verify them after every build.
+
 ## 0.2.0
 
 ### Minor Changes

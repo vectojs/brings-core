@@ -6,6 +6,7 @@ import {
   type DocumentContent,
 } from '../src';
 import { planCommand } from '../src/document/plan';
+import type { FrameNodeInput } from '../src/document/types';
 
 const ids = {
   document: '11111111-1111-4111-8111-111111111111',
@@ -16,6 +17,9 @@ const ids = {
   rectangle: '66666666-6666-4666-8666-666666666666',
   group: '77777777-7777-4777-8777-777777777777',
   child: '88888888-8888-4888-8888-888888888888',
+  nestedGroup: '99999999-9999-4999-8999-999999999999',
+  sibling: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  emptyGroup: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -450,6 +454,239 @@ test('prunes a Group that becomes empty while preserving its Frame', () => {
   if (!result.ok) return;
   expect(result.value.nodes).toHaveLength(1);
   expect(result.value.nodes[0]).toMatchObject({ id: ids.frame, childIds: [] });
+});
+
+test('deletes multiple sibling subtrees atomically', () => {
+  const before = initialDocument();
+  const inserted = unwrap(
+    planCommand(before, {
+      ...frameCommand(),
+      nodes: [
+        {
+          ...(frameCommand().nodes[0] as FrameNodeInput),
+          childIds: [ids.rectangle, ids.child],
+        },
+        frameCommand().nodes[1],
+        {
+          ...frameCommand().nodes[1],
+          id: ids.child,
+          name: 'Sibling rectangle',
+        },
+      ],
+    }),
+  );
+  const document = documentFromContent(before, inserted, 1);
+
+  expect(
+    planCommand(document, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle, ids.child],
+    }),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      pages: [{ id: ids.page1, rootNodeIds: [ids.frame] }],
+      nodes: [{ id: ids.frame, childIds: [] }],
+    },
+  });
+});
+
+test('normalizes duplicate and overlapping targets while recursively pruning newly empty Groups', () => {
+  const before = initialDocument();
+  const inserted = unwrap(
+    planCommand(before, {
+      kind: 'insert-subtree',
+      pageId: ids.page1,
+      parentId: null,
+      index: 0,
+      rootId: ids.frame,
+      nodes: [
+        {
+          ...(frameCommand().nodes[0] as FrameNodeInput),
+          childIds: [ids.rectangle, ids.group],
+        },
+        frameCommand().nodes[1],
+        {
+          id: ids.group,
+          type: 'group',
+          name: 'Outer group',
+          parentId: ids.frame,
+          visible: true,
+          locked: false,
+          opacity: 1,
+          transform: [1, 0, 0, 1, 0, 0],
+          childIds: [ids.nestedGroup, ids.sibling],
+        },
+        {
+          id: ids.nestedGroup,
+          type: 'group',
+          name: 'Nested group',
+          parentId: ids.group,
+          visible: true,
+          locked: false,
+          opacity: 1,
+          transform: [1, 0, 0, 1, 0, 0],
+          childIds: [ids.child],
+        },
+        {
+          ...frameCommand().nodes[1],
+          id: ids.child,
+          name: 'Nested child',
+          parentId: ids.nestedGroup,
+        },
+        {
+          ...frameCommand().nodes[1],
+          id: ids.sibling,
+          name: 'Group sibling',
+          parentId: ids.group,
+        },
+      ],
+    }),
+  );
+  const document = documentFromContent(before, inserted, 1);
+
+  expect(
+    planCommand(document, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.nestedGroup, ids.child, ids.nestedGroup, ids.sibling],
+    }),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      pages: [{ id: ids.page1, rootNodeIds: [ids.frame] }],
+      nodes: [{ id: ids.frame, childIds: [ids.rectangle] }, { id: ids.rectangle }],
+    },
+  });
+});
+
+test('rejects malformed atomic delete target arrays', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+
+  expect(planCommand(document, { kind: 'delete-nodes', nodeIds: [] })).toEqual({
+    ok: false,
+    error: { code: 'array.empty', path: '/nodeIds' },
+  });
+  expect(
+    planCommand(document, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle, 'not-a-uuid'],
+    }),
+  ).toEqual({ ok: false, error: { code: 'id.invalid', path: '/nodeIds/1' } });
+});
+
+test('keeps atomic delete failures byte-identical for missing, inactive, and locked nodes', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+  const assertAtomicFailure = (
+    source: BringsDocument,
+    command: Parameters<typeof planCommand>[1],
+    expected: ReturnType<typeof planCommand>,
+  ) => {
+    const json = JSON.stringify(source);
+    expect(planCommand(source, command)).toEqual(expected);
+    expect(JSON.stringify(source)).toBe(json);
+  };
+
+  assertAtomicFailure(
+    document,
+    { kind: 'delete-nodes', nodeIds: [ids.document] },
+    { ok: false, error: { code: 'node.not-found', path: '/nodeIds/0' } },
+  );
+
+  const page2 = unwrap(
+    planCommand(document, { kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }),
+  );
+  const inactive = documentFromContent(document, page2, 2);
+  assertAtomicFailure(
+    inactive,
+    { kind: 'delete-nodes', nodeIds: [ids.frame] },
+    {
+      ok: false,
+      error: { code: 'command.source-page-mismatch', path: '/nodeIds/0' },
+    },
+  );
+
+  const locked = unwrap(
+    validateDocument({
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === ids.rectangle ? { ...node, locked: true } : node,
+      ),
+    }),
+  );
+  assertAtomicFailure(
+    locked,
+    { kind: 'delete-nodes', nodeIds: [ids.frame] },
+    { ok: false, error: { code: 'node.locked', path: '/nodes/1/locked' } },
+  );
+});
+
+test('rejects atomic deletion through a locked ancestor without mutating the source', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+  const lockedAncestor = unwrap(
+    validateDocument({
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === ids.frame ? { ...node, locked: true } : node,
+      ),
+    }),
+  );
+  const json = JSON.stringify(lockedAncestor);
+
+  expect(
+    planCommand(lockedAncestor, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle],
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'node.locked', path: '/nodes/0/locked' },
+  });
+  expect(JSON.stringify(lockedAncestor)).toBe(json);
+});
+
+test('does not prune an unrelated Group that was already empty before atomic deletion', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+  const invalidSource = {
+    ...document,
+    pages: document.pages.map((page) => ({
+      ...page,
+      rootNodeIds: [...page.rootNodeIds, ids.emptyGroup],
+    })),
+    nodes: [
+      ...document.nodes,
+      {
+        id: ids.emptyGroup,
+        type: 'group',
+        name: 'Pre-existing empty group',
+        parentId: null,
+        visible: true,
+        locked: false,
+        opacity: 1,
+        transform: [1, 0, 0, 1, 0, 0],
+        childIds: [],
+      },
+    ],
+  } as unknown as BringsDocument;
+  const json = JSON.stringify(invalidSource);
+
+  expect(
+    planCommand(invalidSource, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle],
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'node.group-empty', path: '/nodes/1/childIds' },
+  });
+  expect(JSON.stringify(invalidSource)).toBe(json);
 });
 
 test('applies a page-space transform delta to a nested node without retaining command values', () => {

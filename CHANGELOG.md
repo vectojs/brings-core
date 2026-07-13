@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+### Minor Changes
+
+- 0cf35f9: Add atomic page-space transform-delta commands with parent-local affine derivation and selection-preserving history.
+
 ## 0.5.0
 
 ### Minor Changes

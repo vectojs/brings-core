@@ -9,6 +9,7 @@ const ids = {
   page3: '44444444-4444-4444-8444-444444444444',
   frame: '55555555-5555-4555-8555-555555555555',
   rectangle: '66666666-6666-4666-8666-666666666666',
+  secondRectangle: '77777777-7777-4777-8777-777777777777',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -67,6 +68,23 @@ const insertFrame = {
     },
   ],
 };
+
+function insertFrameWithSibling(secondRectangleLocked = false) {
+  return {
+    ...insertFrame,
+    nodes: [
+      { ...insertFrame.nodes[0], childIds: [ids.rectangle, ids.secondRectangle] },
+      insertFrame.nodes[1],
+      {
+        ...insertFrame.nodes[1],
+        id: ids.secondRectangle,
+        name: 'Second Rectangle',
+        locked: secondRectangleLocked,
+        transform: [1, 0, 0, 1, 160, 20] as const,
+      },
+    ],
+  };
+}
 
 test('executes, undoes, and redoes with identity preservation and monotonic revision', () => {
   const store = createStore();
@@ -399,5 +417,68 @@ test('leaves document selection and history byte-identical after a failed transf
       delta: [1, 0, 0, 0, 10, 10],
     }),
   ).toEqual({ ok: false, error: { code: 'matrix.singular', path: '/delta' } });
+  expect(JSON.stringify(store.snapshot())).toBe(before);
+});
+
+test('records one atomic deletion and restores the active selection through undo and redo', () => {
+  const store = createStore();
+  expect(store.execute(insertFrameWithSibling()).ok).toBe(true);
+  expect(
+    store.setSelection({
+      nodeIds: [ids.rectangle, ids.secondRectangle],
+      activeNodeId: ids.secondRectangle,
+    }).ok,
+  ).toBe(true);
+
+  expect(
+    store.execute({
+      kind: 'delete-nodes',
+      nodeIds: store.snapshot().selection.nodeIds,
+    }).ok,
+  ).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: { revision: 2, nodes: [{ id: ids.frame, childIds: [] }] },
+    selection: { nodeIds: [], activeNodeId: null },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: {
+      revision: 3,
+      nodes: [{ id: ids.frame }, { id: ids.rectangle }, { id: ids.secondRectangle }],
+    },
+    selection: {
+      nodeIds: [ids.rectangle, ids.secondRectangle],
+      activeNodeId: ids.secondRectangle,
+    },
+    undoDepth: 1,
+    redoDepth: 1,
+  });
+
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: { revision: 4, nodes: [{ id: ids.frame, childIds: [] }] },
+    selection: { nodeIds: [], activeNodeId: null },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+});
+
+test('leaves the complete snapshot byte-identical after a locked atomic deletion fails', () => {
+  const store = createStore();
+  expect(store.execute(insertFrameWithSibling(true)).ok).toBe(true);
+  expect(store.setSelection({ nodeIds: [ids.rectangle], activeNodeId: ids.rectangle }).ok).toBe(
+    true,
+  );
+  const before = JSON.stringify(store.snapshot());
+
+  expect(
+    store.execute({
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle, ids.secondRectangle],
+    }),
+  ).toEqual({ ok: false, error: { code: 'node.locked', path: '/nodes/2/locked' } });
   expect(JSON.stringify(store.snapshot())).toBe(before);
 });

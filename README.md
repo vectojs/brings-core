@@ -15,7 +15,7 @@ The current Core provides strict schema-v1 document validation and a
 transactional in-memory store. It supports Frame, Group, Rectangle, Ellipse,
 and Text document values; page creation, renaming, reordering, deletion, and
 activation; intention-level Frame and Rectangle creation; detached-subtree
-insertion and deletion; normalized ephemeral selection; renderer-free
+insertion and atomic multi-subtree deletion; normalized ephemeral selection; renderer-free
 page-space hit testing; page-space affine transform deltas; and atomic
 undo/redo with monotonic revisions.
 
@@ -48,6 +48,11 @@ if (storeResult.ok) {
       nodeIds: selectedNodeIds,
       delta: [1, 0, 0, 1, 24, -8],
     });
+  }
+
+  const selection = store.snapshot().selection.nodeIds;
+  if (selection.length > 0) {
+    store.execute({ kind: 'delete-nodes', nodeIds: selection });
   }
 }
 ```

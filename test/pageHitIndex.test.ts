@@ -4,6 +4,7 @@ import {
   intersectPageRect,
   validateDocument,
   type BringsDocument,
+  type Matrix,
   type NodeId,
   type PageId,
   type PageRect,
@@ -164,6 +165,41 @@ function expectParity(document: BringsDocument, rects: readonly PageRect[]): voi
       expect(created.value.hitTest(point)).toEqual(hitTestPage(document, point));
     }
   }
+}
+
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function randomBetween(random: () => number, minimum: number, maximum: number): number {
+  return minimum + (maximum - minimum) * random();
+}
+
+function randomTransform(random: () => number): Matrix {
+  const angle = randomBetween(random, -Math.PI, Math.PI);
+  const scaleX = randomBetween(random, 0.25, 2.5);
+  const scaleY = randomBetween(random, 0.25, 2.5);
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  return [
+    cosine * scaleX,
+    sine * scaleX,
+    -sine * scaleY,
+    cosine * scaleY,
+    randomBetween(random, -2_000, 2_000),
+    randomBetween(random, -2_000, 2_000),
+  ];
+}
+
+function generatedNodeId(index: number): NodeId {
+  return `90000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}` as NodeId;
 }
 
 test('matches direct traversal for exact silhouettes, order, and nested clipping', () => {
@@ -809,6 +845,11 @@ test('falls back atomically for large queries and allocation caps', () => {
 test('keeps tolerance-adjacent hits across hash-cell boundaries', () => {
   for (const boundary of [512, 512 * 2_000_000]) {
     const delta = Math.max(1e-9, Math.abs(boundary) * 1e-11);
+    const clipRight = boundary - delta;
+    const candidateLeft = boundary + delta;
+    expect(clipRight).toBeLessThan(boundary);
+    expect(candidateLeft).toBeGreaterThan(boundary);
+    expect(candidateLeft - clipRight).toBeLessThan(Math.abs(boundary) * 1e-9);
     const candidateId = ids.rectangle;
     const directDocument = documentWith(
       [
@@ -836,18 +877,18 @@ test('keeps tolerance-adjacent hits across hash-cell boundaries', () => {
       [
         frame({
           id: ids.clip,
-          transform: [1, 0, 0, 1, boundary - 20, 100],
-          width: 40,
-          height: 2_000,
+          transform: [1, 0, 0, 1, boundary - 12, 100],
+          width: clipRight - (boundary - 12),
+          height: 4,
           childIds: [ids.child],
           clipChildren: true,
         }),
         rectangle({
           id: ids.child,
           parentId: ids.clip,
-          transform: [1, 0, 0, 1, 8, 0],
-          width: 30,
-          height: 1_500,
+          transform: [1, 0, 0, 1, candidateLeft - (boundary - 12), 0],
+          width: 4,
+          height: 4,
         }),
       ],
       [ids.clip],
@@ -855,13 +896,19 @@ test('keeps tolerance-adjacent hits across hash-cell boundaries', () => {
     const clippedIndex = createPageHitIndex(clippedDocument);
     expect(clippedIndex.ok).toBe(true);
     if (!clippedIndex.ok) continue;
-    const clippedQuery = { x: point.x, y: 200, width: 2, height: 1_000 } as const;
+    const clippedQuery = { x: candidateLeft, y: 101, width: 2, height: 1 } as const;
     const expected = intersectPageRect(clippedDocument, clippedQuery);
     expect(expected, `clipped boundary ${boundary}`).toEqual({
       ok: true,
       value: [ids.clip, ids.child],
     });
-    expect(inspectPageHitIndex(clippedIndex.value, clippedQuery).result).toEqual(expected);
+    const inspected = inspectPageHitIndex(clippedIndex.value, clippedQuery);
+    expect(inspected.result).toEqual(expected);
+    expect(inspected.metrics.usedScanFallback).toBe(false);
+    expect(inspected.metrics.bucketReferencesRead).toBeGreaterThan(0);
+    expect(inspected.indexStats.mode).toBe('hash');
+    expect(inspected.indexStats.globalEventCount).toBe(1);
+    expect(inspected.indexStats.oversizedEventCount).toBe(0);
   }
 });
 
@@ -879,4 +926,108 @@ test('uses master scan for numerically unsafe query cells', () => {
   const inspected = inspectPageHitIndex(created.value, rect);
   expect(inspected.metrics.usedScanFallback).toBe(true);
   expect(inspected.result).toEqual(intersectPageRect(document, rect));
+});
+
+test('matches direct traversal across a seeded moderate-coordinate corpus', () => {
+  const random = seededRandom(0x51a7_1a5e);
+  const documentCount = 32;
+  const queriesPerDocument = 16;
+
+  for (let documentIndex = 0; documentIndex < documentCount; documentIndex += 1) {
+    const offset = documentIndex * 8;
+    const outerId = generatedNodeId(offset);
+    const innerId = generatedNodeId(offset + 1);
+    const innerRectangleId = generatedNodeId(offset + 2);
+    const innerEllipseId = generatedNodeId(offset + 3);
+    const outerRectangleId = generatedNodeId(offset + 4);
+    const rootRectangleId = generatedNodeId(offset + 5);
+    const rootEllipseId = generatedNodeId(offset + 6);
+    const rootTextId = generatedNodeId(offset + 7);
+    const width = (): number => randomBetween(random, 8, 320);
+    const height = (): number => randomBetween(random, 8, 240);
+
+    const document = documentWith(
+      [
+        frame({
+          id: outerId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+          childIds: [innerId, outerRectangleId],
+          clipChildren: random() < 0.75,
+        }),
+        frame({
+          id: innerId,
+          parentId: outerId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+          childIds: [innerRectangleId, innerEllipseId],
+          clipChildren: random() < 0.75,
+        }),
+        rectangle({
+          id: innerRectangleId,
+          parentId: innerId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+          stroke: random() < 0.5 ? { paint, width: randomBetween(random, 0, 24) } : null,
+        }),
+        ellipse({
+          id: innerEllipseId,
+          parentId: innerId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+          stroke: random() < 0.5 ? { paint, width: randomBetween(random, 0, 24) } : null,
+        }),
+        rectangle({
+          id: outerRectangleId,
+          parentId: outerId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+        }),
+        rectangle({
+          id: rootRectangleId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+        }),
+        ellipse({
+          id: rootEllipseId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+        }),
+        text({
+          id: rootTextId,
+          transform: randomTransform(random),
+          width: width(),
+          height: height(),
+        }),
+      ],
+      [outerId, rootRectangleId, rootEllipseId, rootTextId],
+    );
+    const created = createPageHitIndex(document);
+    expect(created.ok, `document ${documentIndex}`).toBe(true);
+    if (!created.ok) continue;
+
+    for (let queryIndex = 0; queryIndex < queriesPerDocument; queryIndex += 1) {
+      const pointQuery = queryIndex % 4 === 0;
+      const rect: PageRect =
+        queryIndex === 0
+          ? { x: -20_000, y: -20_000, width: 40_000, height: 40_000 }
+          : {
+              x: randomBetween(random, -4_000, 4_000),
+              y: randomBetween(random, -4_000, 4_000),
+              width: pointQuery ? 0 : randomBetween(random, -600, 600),
+              height: pointQuery ? 0 : randomBetween(random, -600, 600),
+            };
+      expect(
+        created.value.intersect(rect),
+        `document ${documentIndex}, query ${queryIndex}`,
+      ).toEqual(intersectPageRect(document, rect));
+    }
+  }
 });

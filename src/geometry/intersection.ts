@@ -30,6 +30,12 @@ function signedArea(polygon: Polygon): number {
   return area / 2;
 }
 
+function isDegeneratePolygon(polygon: Polygon): boolean {
+  const area = signedArea(polygon);
+  const areaEpsilon = tolerance(polygon.flatMap((point) => [point.x, point.y, area]));
+  return Math.abs(area) <= areaEpsilon;
+}
+
 function insideHalfPlane(
   point: GeometryPoint,
   start: GeometryPoint,
@@ -99,8 +105,7 @@ function pointInConvexPolygon(point: GeometryPoint, polygon: Polygon): boolean {
   if (polygon.length === 2) return pointOnSegment(point, polygon[0]!, polygon[1]!);
 
   const area = signedArea(polygon);
-  const areaEpsilon = tolerance(polygon.flatMap((entry) => [entry.x, entry.y, area]));
-  if (Math.abs(area) <= areaEpsilon) {
+  if (isDegeneratePolygon(polygon)) {
     return polygon.some((start, index) =>
       pointOnSegment(point, start, polygon[(index + 1) % polygon.length]!),
     );
@@ -186,8 +191,7 @@ export function boundsIntersect(left: Bounds, right: Bounds): boolean {
 export function clipConvexPolygon(subject: Polygon, clip: Polygon): Polygon {
   if (subject.length === 0 || clip.length < 3) return [];
   const area = signedArea(clip);
-  const areaTolerance = tolerance(clip.flatMap((point) => [point.x, point.y, area]));
-  if (Math.abs(area) <= areaTolerance) return [];
+  if (isDegeneratePolygon(clip)) return [];
   const windingSign = area > 0 ? 1 : -1;
   let output = [...subject];
 
@@ -225,7 +229,7 @@ export function polygonsIntersect(left: Polygon, right: Polygon): boolean {
     return false;
   }
 
-  if (left.length >= 3 && right.length >= 3) {
+  if (!isDegeneratePolygon(left) && !isDegeneratePolygon(right)) {
     return clipConvexPolygon(left, right).length > 0;
   }
   if (left.some((point) => pointInConvexPolygon(point, right))) return true;

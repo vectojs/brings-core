@@ -94,6 +94,18 @@ test('treats point, line, edge, and corner contact as polygon intersections', ()
   ).toEqual({ minX: 0, minY: 0, maxX: 10, maxY: 0 });
 });
 
+test('intersects degenerate rectangle polygons independently of operand order', () => {
+  const box = rectanglePolygon(0, 0, 10, 10);
+  const zeroWidth = rectanglePolygon(5, -5, 0, 20);
+  const zeroHeight = rectanglePolygon(-5, 5, 20, 0);
+  const point = rectanglePolygon(5, 5, 0, 0);
+
+  for (const degenerate of [zeroWidth, zeroHeight, point]) {
+    expect(polygonsIntersect(degenerate, box)).toBe(true);
+    expect(polygonsIntersect(box, degenerate)).toBe(true);
+  }
+});
+
 test('rejects convex polygons whose bounds overlap without exact contact', () => {
   const lowerLeft = [
     { x: 0, y: 0 },

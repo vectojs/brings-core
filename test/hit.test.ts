@@ -542,3 +542,157 @@ test('does not expose mutable query result aliases', () => {
   if (!second.ok) return;
   expect(plainIds(second.value)).toEqual([ids.frame, ids.rectangle]);
 });
+
+test('preserves paint order for overlapping roots and siblings', () => {
+  const roots = documentWith(
+    [
+      rectangle({ width: 80, height: 80 }),
+      rectangle({ id: ids.rectangle2, width: 80, height: 80 }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+  expect(intersectPageRect(roots, { x: 20, y: 20, width: 10, height: 10 })).toEqual({
+    ok: true,
+    value: [ids.rectangle, ids.rectangle2],
+  });
+  expect(hitTestPage(roots, { x: 25, y: 25 })).toEqual([ids.rectangle2, ids.rectangle]);
+
+  const siblings = documentWith(
+    [
+      frame({ childIds: [ids.rectangle, ids.rectangle2] }),
+      rectangle({ parentId: ids.frame, width: 80, height: 80 }),
+      rectangle({ id: ids.rectangle2, parentId: ids.frame, width: 80, height: 80 }),
+    ],
+    [ids.frame],
+  );
+  expect(intersectPageRect(siblings, { x: 20, y: 20, width: 10, height: 10 })).toEqual({
+    ok: true,
+    value: [ids.frame, ids.rectangle, ids.rectangle2],
+  });
+  expect(hitTestPage(siblings, { x: 25, y: 25 })).toEqual([
+    ids.rectangle2,
+    ids.rectangle,
+    ids.frame,
+  ]);
+});
+
+test('composes affine clipping and centered local strokes without expanding clip content', () => {
+  const affine = [1, 0.5, 0.25, 1, 100, 50] as const;
+  const document = documentWith(
+    [
+      frame({
+        transform: affine,
+        childIds: [ids.rectangle],
+        stroke: { paint, width: 20 },
+        clipChildren: true,
+      }),
+      rectangle({
+        parentId: ids.frame,
+        transform: [1, 0, 0, 1, 80, 40],
+        width: 40,
+        height: 20,
+        stroke: { paint, width: 4 },
+      }),
+    ],
+    [ids.frame],
+  );
+  const pagePoint = (localX: number, localY: number) => ({
+    x: affine[0] * localX + affine[2] * localY + affine[4],
+    y: affine[1] * localX + affine[3] * localY + affine[5],
+  });
+  const queryPoint = (localX: number, localY: number) => ({
+    ...pagePoint(localX, localY),
+    width: 0,
+    height: 0,
+  });
+
+  expect(intersectPageRect(document, queryPoint(-10, 50))).toEqual({
+    ok: true,
+    value: [ids.frame],
+  });
+  expect(intersectPageRect(document, queryPoint(-10.1, 50))).toEqual({
+    ok: true,
+    value: [],
+  });
+  expect(intersectPageRect(document, queryPoint(78, 50))).toEqual({
+    ok: true,
+    value: [ids.frame, ids.rectangle],
+  });
+  expect(intersectPageRect(document, queryPoint(77.9, 50))).toEqual({
+    ok: true,
+    value: [ids.frame],
+  });
+  expect(intersectPageRect(document, queryPoint(105, 50))).toEqual({
+    ok: true,
+    value: [ids.frame],
+  });
+  expect(intersectPageRect(document, queryPoint(111, 50))).toEqual({
+    ok: true,
+    value: [],
+  });
+});
+
+test('returns only an error when a later front node overflows after an earlier hit', () => {
+  const query: PageRect = { x: 0, y: 0, width: 10, height: 10 };
+  const exactOverflow = documentWith(
+    [
+      rectangle({ width: 20, height: 20 }),
+      rectangle({
+        id: ids.rectangle2,
+        transform: [Number.MAX_VALUE, 0, 0, 1, Number.MAX_VALUE, 0],
+        width: 2,
+        height: 1,
+      }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+  const exactBefore = JSON.stringify(exactOverflow);
+  const queryBefore = JSON.stringify(query);
+  expect(intersectPageRect(exactOverflow, query)).toEqual({
+    ok: false,
+    error: { code: 'geometry.computation-overflow', path: '/nodes/1/transform' },
+  });
+  expect(JSON.stringify(exactOverflow)).toBe(exactBefore);
+  expect(JSON.stringify(query)).toBe(queryBefore);
+
+  const composedOverflow = documentWith(
+    [
+      rectangle({ width: 20, height: 20 }),
+      group({
+        id: ids.group,
+        transform: [Number.MAX_VALUE, 0, 0, 1, 0, 0],
+        childIds: [ids.child],
+      }),
+      rectangle({
+        id: ids.child,
+        parentId: ids.group,
+        transform: [Number.MAX_VALUE, 0, 0, 1, 0, 0],
+        width: 1,
+        height: 1,
+      }),
+    ],
+    [ids.rectangle, ids.group],
+  );
+  const composedBefore = JSON.stringify(composedOverflow);
+  expect(intersectPageRect(composedOverflow, query)).toEqual({
+    ok: false,
+    error: { code: 'geometry.computation-overflow', path: '/nodes/2/transform' },
+  });
+  expect(JSON.stringify(composedOverflow)).toBe(composedBefore);
+  expect(JSON.stringify(query)).toBe(queryBefore);
+});
+
+test('rejects an active-page root whose parent link is non-null', () => {
+  const valid = nestedDocument();
+  const invalidRoot = {
+    ...valid,
+    pages: [{ ...valid.pages[0]!, rootNodeIds: [ids.rectangle] }],
+  } as BringsDocument;
+  const before = JSON.stringify(invalidRoot);
+
+  expect(intersectPageRect(invalidRoot, { x: 0, y: 0, width: 10, height: 10 })).toEqual({
+    ok: false,
+    error: { code: 'geometry.document-invariant', path: '/nodes/1/parentId' },
+  });
+  expect(JSON.stringify(invalidRoot)).toBe(before);
+});

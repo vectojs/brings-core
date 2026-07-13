@@ -22,14 +22,25 @@ export type NormalizedPageRect = Readonly<{
 
 type SelectableNode = Exclude<SceneNode, { type: 'group' }>;
 
+type PreparedPolygonSilhouette = Readonly<{
+  kind: 'polygon';
+  pagePolygon: Polygon;
+}>;
+
+type PreparedEllipseSilhouette = Readonly<{
+  kind: 'ellipse';
+  pageMatrix: Matrix;
+  width: number;
+  height: number;
+  localStrokeExpansion: number;
+}>;
+
 export type PreparedSelectionCandidate = Readonly<{
   id: NodeId;
   nodeIndex: number;
-  node: SelectableNode;
-  pageMatrix: Matrix;
   pageBounds: Bounds;
-  pagePolygon: Polygon | null;
   path: string;
+  silhouette: PreparedPolygonSilhouette | PreparedEllipseSilhouette;
 }>;
 
 function failure(code: string, path: string): Result<never> {
@@ -42,6 +53,30 @@ function success<T>(value: T): Result<T> {
 
 function nodeTransformPath(nodeIndex: number): string {
   return `/nodes/${nodeIndex}/transform`;
+}
+
+function freezeMatrix(matrix: Matrix): Matrix {
+  return Object.freeze([
+    matrix[0],
+    matrix[1],
+    matrix[2],
+    matrix[3],
+    matrix[4],
+    matrix[5],
+  ]) as Matrix;
+}
+
+function freezeBounds(bounds: Bounds): Bounds {
+  return Object.freeze({
+    minX: bounds.minX,
+    minY: bounds.minY,
+    maxX: bounds.maxX,
+    maxY: bounds.maxY,
+  });
+}
+
+function freezePolygon(polygon: Polygon): Polygon {
+  return Object.freeze(polygon.map((point) => Object.freeze({ x: point.x, y: point.y })));
 }
 
 export function normalizePageRect(rect: PageRect): Result<NormalizedPageRect> {
@@ -125,15 +160,26 @@ export function prepareSelectionCandidate(
   const pageBounds = polygonBounds(silhouette.value);
   if (pageBounds === null) return failure('geometry.computation-overflow', path);
 
-  return success({
-    id: node.id,
-    nodeIndex,
-    node,
-    pageMatrix,
-    pageBounds,
-    pagePolygon: node.type === 'ellipse' ? null : silhouette.value,
-    path,
-  });
+  const preparedSilhouette: PreparedPolygonSilhouette | PreparedEllipseSilhouette =
+    node.type === 'ellipse'
+      ? Object.freeze({
+          kind: 'ellipse',
+          pageMatrix: freezeMatrix(pageMatrix),
+          width: node.width,
+          height: node.height,
+          localStrokeExpansion: localStrokeExpansion(node.stroke?.width ?? null),
+        })
+      : Object.freeze({ kind: 'polygon', pagePolygon: freezePolygon(silhouette.value) });
+
+  return success(
+    Object.freeze({
+      id: node.id,
+      nodeIndex,
+      pageBounds: freezeBounds(pageBounds),
+      path,
+      silhouette: preparedSilhouette,
+    }),
+  );
 }
 
 export function preparedCandidateIntersects(
@@ -145,11 +191,11 @@ export function preparedCandidateIntersects(
     return success(false);
   }
 
-  if (candidate.node.type !== 'ellipse') {
-    return polygonsIntersect(candidate.pagePolygon!, query, candidate.path);
+  if (candidate.silhouette.kind === 'polygon') {
+    return polygonsIntersect(candidate.silhouette.pagePolygon, query, candidate.path);
   }
 
-  const inverse = invertMatrix(candidate.pageMatrix, candidate.path);
+  const inverse = invertMatrix(candidate.silhouette.pageMatrix, candidate.path);
   if (!inverse.ok) {
     if (inverse.error.code === 'matrix.singular') return success(false);
     return failure('geometry.computation-overflow', candidate.path);
@@ -158,9 +204,9 @@ export function preparedCandidateIntersects(
   if (!localQuery.ok) return localQuery;
   return ellipseIntersectsPolygon(
     localQuery.value,
-    candidate.node.width,
-    candidate.node.height,
-    localStrokeExpansion(candidate.node.stroke?.width ?? null),
+    candidate.silhouette.width,
+    candidate.silhouette.height,
+    candidate.silhouette.localStrokeExpansion,
     candidate.path,
   );
 }

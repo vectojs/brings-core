@@ -40,6 +40,12 @@ test('prepares selectable silhouettes without document traversal', () => {
   expect(rectangle.ok).toBe(true);
   if (!rectangle.ok || rectangle.value === null) return;
   expect(rectangle.value.pageBounds).toEqual({ minX: 36, minY: 53, maxX: 64, maxY: 132 });
+  expect(rectangle.value.silhouette.kind).toBe('polygon');
+  expect(Object.isFrozen(rectangle.value.silhouette)).toBe(true);
+  if (rectangle.value.silhouette.kind === 'polygon') {
+    expect(Object.isFrozen(rectangle.value.silhouette.pagePolygon)).toBe(true);
+    expect(rectangle.value.silhouette.pagePolygon.every(Object.isFrozen)).toBe(true);
+  }
   expect(preparedCandidateIntersects(rectangle.value, rectanglePolygon(36, 57, 1, 1))).toEqual({
     ok: true,
     value: true,
@@ -121,6 +127,86 @@ test('preserves centered ellipse strokes and measured text boxes', () => {
     value: true,
   });
   expect(preparedCandidateIntersects(preparedText.value, rectanglePolygon(91, 35, 0, 0))).toEqual({
+    ok: true,
+    value: false,
+  });
+});
+
+test('detaches and freezes prepared ellipse geometry from mutable source aliases', () => {
+  const ellipse = validatedNode({
+    id: FIXTURE_IDS.ellipse,
+    type: 'ellipse',
+    name: 'Ellipse',
+    parentId: null,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    transform: [1, 0, 0, 1, 0, 0],
+    width: 20,
+    height: 10,
+    fill: paint,
+    stroke: { paint, width: 4 },
+  });
+  const pageMatrix = [2, 0.5, 0.5, 1.5, 40, 30] as unknown as Matrix;
+  const prepared = prepareSelectionCandidate(ellipse, pageMatrix, 2);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok || prepared.value === null) return;
+
+  const point = rectanglePolygon(62.5, 42.5, 0, 0);
+  expect(preparedCandidateIntersects(prepared.value, point)).toEqual({ ok: true, value: true });
+
+  const mutableEllipse = ellipse as unknown as {
+    width: number;
+    height: number;
+    stroke: { width: number } | null;
+  };
+  mutableEllipse.width = 1;
+  mutableEllipse.height = 1;
+  if (mutableEllipse.stroke !== null) mutableEllipse.stroke.width = 0;
+  const mutablePageMatrix = pageMatrix as unknown as number[];
+  mutablePageMatrix[0] = 1;
+  mutablePageMatrix[1] = 0;
+  mutablePageMatrix[2] = 0;
+  mutablePageMatrix[3] = 1;
+  mutablePageMatrix[4] = 1_000;
+  mutablePageMatrix[5] = 1_000;
+
+  expect(preparedCandidateIntersects(prepared.value, point)).toEqual({ ok: true, value: true });
+  expect(Object.isFrozen(prepared.value)).toBe(true);
+  expect('node' in prepared.value).toBe(false);
+  expect('pageMatrix' in prepared.value).toBe(false);
+  expect(Object.isFrozen(prepared.value.pageBounds)).toBe(true);
+  expect(prepared.value.silhouette.kind).toBe('ellipse');
+  expect(Object.isFrozen(prepared.value.silhouette)).toBe(true);
+  if (prepared.value.silhouette.kind === 'ellipse') {
+    expect(Object.isFrozen(prepared.value.silhouette.pageMatrix)).toBe(true);
+  }
+});
+
+test('evaluates affine sheared ellipses through the prepared seam', () => {
+  const ellipse = validatedNode({
+    id: FIXTURE_IDS.ellipse,
+    type: 'ellipse',
+    name: 'Ellipse',
+    parentId: null,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    transform: [1, 0, 0, 1, 0, 0],
+    width: 20,
+    height: 10,
+    fill: paint,
+    stroke: null,
+  });
+  const prepared = prepareSelectionCandidate(ellipse, [2, 0.5, 0.5, 1.5, 40, 30], 3);
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok || prepared.value === null) return;
+
+  expect(preparedCandidateIntersects(prepared.value, rectanglePolygon(62.5, 42.5, 0, 0))).toEqual({
+    ok: true,
+    value: true,
+  });
+  expect(preparedCandidateIntersects(prepared.value, rectanglePolygon(84, 31, 0, 0))).toEqual({
     ok: true,
     value: false,
   });

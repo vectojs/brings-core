@@ -10,7 +10,12 @@ import {
   type SceneNodeInput,
   type UUID,
 } from '../src';
-import { createPageHitIndex } from '../src/geometry/pageHitIndex';
+import {
+  createPageHitIndex,
+  createPageHitIndexForTesting,
+  DEFAULT_PAGE_HIT_INDEX_LIMITS,
+  inspectPageHitIndex,
+} from '../src/geometry/pageHitIndex';
 
 const ids = {
   document: '11111111-1111-4111-8111-111111111111' as UUID,
@@ -654,4 +659,224 @@ test('detaches prepared geometry and errors from caller-owned document values', 
   const failedHit = created.value.hitTest({ x: 1, y: 1 });
   expect(failedHit).toEqual([]);
   expect(Object.isFrozen(failedHit)).toBe(true);
+});
+
+test('classifies bounded, global, oversized, and duplicate hash events', () => {
+  const bounded = documentWith(
+    [
+      rectangle({ transform: [1, 0, 0, 1, 100, 100], width: 600, height: 20 }),
+      frame({
+        id: ids.clip,
+        transform: [1, 0, 0, 1, 2_000, 2_000],
+        width: 10,
+        height: 10,
+        clipChildren: true,
+      }),
+    ],
+    [ids.rectangle, ids.clip],
+  );
+  const created = createPageHitIndex(bounded);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+
+  const duplicate = inspectPageHitIndex(created.value, {
+    x: 500,
+    y: 105,
+    width: 24,
+    height: 0,
+  });
+  expect(duplicate.result).toEqual({ ok: true, value: [ids.rectangle] });
+  expect(duplicate.metrics.bucketReferencesRead).toBeGreaterThan(1);
+  expect(duplicate.metrics.uniqueAabbChecks).toBe(1);
+  expect(duplicate.metrics.narrowPhaseCalls).toBe(1);
+  expect(duplicate.indexStats.mode).toBe('hash');
+  expect(duplicate.indexStats.globalEventCount).toBe(1);
+
+  const oversizedDocument = documentWith(
+    [
+      rectangle({
+        transform: [1, 0, 0, 1, 100, 100],
+        width: 512 * 64 + 100,
+        height: 10,
+      }),
+      rectangle({
+        id: ids.rectangle2,
+        transform: [1, 0, 0, 1, (Number.MAX_SAFE_INTEGER + 1) * 512, 100],
+        width: 1,
+        height: 1,
+      }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+  const oversized = createPageHitIndex(oversizedDocument);
+  expect(oversized.ok).toBe(true);
+  if (!oversized.ok) return;
+  const inspectedOversized = inspectPageHitIndex(oversized.value, {
+    x: 101,
+    y: 101,
+    width: 0,
+    height: 0,
+  });
+  expect(inspectedOversized.result).toEqual({ ok: true, value: [ids.rectangle] });
+  expect(inspectedOversized.indexStats.oversizedEventCount).toBe(2);
+});
+
+test('falls back atomically for large queries and allocation caps', () => {
+  const document = documentWith(
+    [
+      rectangle({ width: 10, height: 10 }),
+      rectangle({
+        id: ids.rectangle2,
+        transform: [1, 0, 0, 1, 2_000, 0],
+        width: 10,
+        height: 10,
+      }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+  const created = createPageHitIndex(document);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  const large = inspectPageHitIndex(created.value, {
+    x: 100,
+    y: 100,
+    width: 512 * 4_096 + 1,
+    height: 0,
+  });
+  expect(large.metrics.usedScanFallback).toBe(true);
+  expect(large.result).toEqual(
+    intersectPageRect(document, {
+      x: 100,
+      y: 100,
+      width: 512 * 4_096 + 1,
+      height: 0,
+    }),
+  );
+
+  for (const limits of [
+    { ...DEFAULT_PAGE_HIT_INDEX_LIMITS, buckets: 1 },
+    { ...DEFAULT_PAGE_HIT_INDEX_LIMITS, references: 1 },
+  ]) {
+    const forced = createPageHitIndexForTesting(document, limits);
+    expect(forced.ok).toBe(true);
+    if (!forced.ok) continue;
+    const inspected = inspectPageHitIndex(forced.value, {
+      x: -1,
+      y: -1,
+      width: 3_000,
+      height: 20,
+    });
+    expect(inspected.indexStats).toMatchObject({
+      mode: 'scan',
+      bucketCount: 0,
+      referenceCount: 0,
+    });
+    expect(inspected.result).toEqual(
+      intersectPageRect(document, { x: -1, y: -1, width: 3_000, height: 20 }),
+    );
+  }
+
+  const globalDocument = documentWith(
+    [
+      frame({ id: ids.clip, clipChildren: true }),
+      frame({ id: ids.nestedClip, clipChildren: true }),
+    ],
+    [ids.clip, ids.nestedClip],
+  );
+  const globalForced = createPageHitIndexForTesting(globalDocument, {
+    ...DEFAULT_PAGE_HIT_INDEX_LIMITS,
+    globalEvents: 1,
+  });
+  expect(globalForced.ok).toBe(true);
+  if (!globalForced.ok) return;
+  const globalInspected = inspectPageHitIndex(globalForced.value, {
+    x: 1,
+    y: 1,
+    width: 0,
+    height: 0,
+  });
+  expect(globalInspected.indexStats).toMatchObject({
+    mode: 'scan',
+    bucketCount: 0,
+    referenceCount: 0,
+    globalEventCount: 2,
+  });
+  expect(globalInspected.result).toEqual(
+    intersectPageRect(globalDocument, { x: 1, y: 1, width: 0, height: 0 }),
+  );
+});
+
+test('keeps tolerance-adjacent hits across hash-cell boundaries', () => {
+  for (const boundary of [512, 512 * 2_000_000]) {
+    const delta = Math.max(1e-9, Math.abs(boundary) * 1e-11);
+    const candidateId = ids.rectangle;
+    const directDocument = documentWith(
+      [
+        rectangle({
+          transform: [1, 0, 0, 1, boundary - 12 - delta, 100],
+          width: 12,
+          height: 10,
+        }),
+      ],
+      [candidateId],
+    );
+    const point = { x: boundary + delta, y: 105 } as const;
+    expect(intersectPageRect(directDocument, { ...point, width: 0, height: 0 })).toEqual({
+      ok: true,
+      value: [candidateId],
+    });
+    const directIndex = createPageHitIndex(directDocument);
+    expect(directIndex.ok).toBe(true);
+    if (!directIndex.ok) continue;
+    expect(
+      inspectPageHitIndex(directIndex.value, { ...point, width: 0, height: 0 }).result,
+    ).toEqual(intersectPageRect(directDocument, { ...point, width: 0, height: 0 }));
+
+    const clippedDocument = documentWith(
+      [
+        frame({
+          id: ids.clip,
+          transform: [1, 0, 0, 1, boundary - 20, 100],
+          width: 40,
+          height: 2_000,
+          childIds: [ids.child],
+          clipChildren: true,
+        }),
+        rectangle({
+          id: ids.child,
+          parentId: ids.clip,
+          transform: [1, 0, 0, 1, 8, 0],
+          width: 30,
+          height: 1_500,
+        }),
+      ],
+      [ids.clip],
+    );
+    const clippedIndex = createPageHitIndex(clippedDocument);
+    expect(clippedIndex.ok).toBe(true);
+    if (!clippedIndex.ok) continue;
+    const clippedQuery = { x: point.x, y: 200, width: 2, height: 1_000 } as const;
+    const expected = intersectPageRect(clippedDocument, clippedQuery);
+    expect(expected, `clipped boundary ${boundary}`).toEqual({
+      ok: true,
+      value: [ids.clip, ids.child],
+    });
+    expect(inspectPageHitIndex(clippedIndex.value, clippedQuery).result).toEqual(expected);
+  }
+});
+
+test('uses master scan for numerically unsafe query cells', () => {
+  const document = documentWith([rectangle({ width: 10, height: 10 })], [ids.rectangle]);
+  const created = createPageHitIndex(document);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  const rect = {
+    x: (Number.MAX_SAFE_INTEGER + 1) * 512,
+    y: 0,
+    width: 0,
+    height: 0,
+  } as const;
+  const inspected = inspectPageHitIndex(created.value, rect);
+  expect(inspected.metrics.usedScanFallback).toBe(true);
+  expect(inspected.result).toEqual(intersectPageRect(document, rect));
 });

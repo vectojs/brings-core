@@ -67,8 +67,71 @@ type ErrorEvent = Readonly<{
 
 type PreparedEvent = CandidateEvent | ClipEvent | ErrorEvent;
 
+type CellRange = Readonly<{
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  count: number;
+}>;
+
+type PageHitIndexLimits = Readonly<{
+  candidateCells: number;
+  queryCells: number;
+  buckets: number;
+  references: number;
+  globalEvents: number;
+}>;
+
+export type PageHitQueryMetrics = Readonly<{
+  cellIterations: number;
+  bucketReferencesRead: number;
+  uniqueAabbChecks: number;
+  narrowPhaseCalls: number;
+  clipOperations: number;
+  usedScanFallback: boolean;
+}>;
+
+type MutablePageHitQueryMetrics = {
+  -readonly [Key in keyof PageHitQueryMetrics]: PageHitQueryMetrics[Key];
+};
+
+type PageHitIndexStats = Readonly<{
+  mode: 'hash' | 'scan';
+  bucketCount: number;
+  referenceCount: number;
+  globalEventCount: number;
+  oversizedEventCount: number;
+}>;
+
+type PreparedPageHitIndex = Readonly<{
+  events: readonly PreparedEvent[];
+  mode: 'hash' | 'scan';
+  buckets: ReadonlyMap<string, readonly number[]>;
+  globalEventIndexes: readonly number[];
+  oversizedEventIndexes: readonly number[];
+  globalEventFlags: readonly boolean[];
+  limits: PageHitIndexLimits;
+  stats: PageHitIndexStats;
+}>;
+
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 const GEOMETRY_EPSILON = 1e-9;
+const PAGE_HIT_CELL_SIZE = 512;
+const PAGE_HIT_MAX_CANDIDATE_CELLS = 64;
+const PAGE_HIT_MAX_QUERY_CELLS = 4_096;
+const PAGE_HIT_MAX_BUCKETS = 262_144;
+const PAGE_HIT_MAX_REFERENCES = 1_000_000;
+const PAGE_HIT_MAX_GLOBAL_EVENTS = 100_000;
+const PAGE_HIT_INDEX_DATA = new WeakMap<PageHitIndex, PreparedPageHitIndex>();
+
+export const DEFAULT_PAGE_HIT_INDEX_LIMITS: PageHitIndexLimits = Object.freeze({
+  candidateCells: PAGE_HIT_MAX_CANDIDATE_CELLS,
+  queryCells: PAGE_HIT_MAX_QUERY_CELLS,
+  buckets: PAGE_HIT_MAX_BUCKETS,
+  references: PAGE_HIT_MAX_REFERENCES,
+  globalEvents: PAGE_HIT_MAX_GLOBAL_EVENTS,
+});
 
 function frozenError(code: string, path: string): BringsError {
   return Object.freeze({ code, path });
@@ -172,6 +235,147 @@ function extendClipChain(previous: ClipChain | null, polygon: Polygon, path: str
 
 function eventActivationBounds(event: PreparedEvent): Bounds | null {
   return event.kind === 'candidate' ? event.insertionBounds : event.activationBounds;
+}
+
+function cellRange(bounds: Bounds): CellRange | null {
+  const minX = Math.floor(bounds.minX / PAGE_HIT_CELL_SIZE);
+  const minY = Math.floor(bounds.minY / PAGE_HIT_CELL_SIZE);
+  const maxX = Math.floor(bounds.maxX / PAGE_HIT_CELL_SIZE);
+  const maxY = Math.floor(bounds.maxY / PAGE_HIT_CELL_SIZE);
+  if (![minX, minY, maxX, maxY].every(Number.isSafeInteger)) return null;
+
+  const columns = maxX - minX + 1;
+  const rows = maxY - minY + 1;
+  if (
+    !Number.isSafeInteger(columns) ||
+    !Number.isSafeInteger(rows) ||
+    columns <= 0 ||
+    rows <= 0 ||
+    columns > Number.MAX_SAFE_INTEGER / rows
+  ) {
+    return null;
+  }
+  return Object.freeze({ minX, minY, maxX, maxY, count: columns * rows });
+}
+
+function cellKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+function isGlobalEvent(event: PreparedEvent): boolean {
+  if (eventActivationBounds(event) === null) return true;
+  if (event.kind === 'clip' && event.incomingChain === null) return true;
+  return event.kind === 'error' && event.chain === null && event.terminal;
+}
+
+function validateLimits(limits: PageHitIndexLimits): PageHitIndexLimits {
+  for (const key of [
+    'candidateCells',
+    'queryCells',
+    'buckets',
+    'references',
+    'globalEvents',
+  ] as const) {
+    const value = limits[key];
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new RangeError('Page-hit index limits must be positive safe integers.');
+    }
+  }
+  return Object.freeze({ ...limits });
+}
+
+function prepareSpatialIndex(
+  events: readonly PreparedEvent[],
+  requestedLimits: PageHitIndexLimits,
+): PreparedPageHitIndex {
+  const limits = validateLimits(requestedLimits);
+  const buckets = new Map<string, number[]>();
+  const globalEventIndexes: number[] = [];
+  const oversizedEventIndexes: number[] = [];
+  const globalEventFlags: boolean[] = [];
+  let hashActive = true;
+  let referenceCount = 0;
+  let globalEventCount = 0;
+  let oversizedEventCount = 0;
+
+  const switchToScan = (): void => {
+    if (!hashActive) return;
+    hashActive = false;
+    buckets.clear();
+    globalEventIndexes.length = 0;
+    oversizedEventIndexes.length = 0;
+    referenceCount = 0;
+  };
+
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const event = events[eventIndex]!;
+    const global = isGlobalEvent(event);
+    globalEventFlags.push(global);
+
+    if (global) {
+      globalEventCount += 1;
+      if (hashActive) {
+        if (globalEventCount > limits.globalEvents) switchToScan();
+        else globalEventIndexes.push(eventIndex);
+      }
+      continue;
+    }
+
+    const bounds = eventActivationBounds(event)!;
+    const range = cellRange(bounds);
+    if (range === null || range.count > limits.candidateCells) {
+      oversizedEventCount += 1;
+      if (hashActive) oversizedEventIndexes.push(eventIndex);
+      continue;
+    }
+    if (!hashActive) continue;
+
+    const keys: string[] = [];
+    let newBucketCount = 0;
+    for (let y = range.minY; y <= range.maxY; y += 1) {
+      for (let x = range.minX; x <= range.maxX; x += 1) {
+        const key = cellKey(x, y);
+        keys.push(key);
+        if (!buckets.has(key)) newBucketCount += 1;
+      }
+    }
+    if (
+      buckets.size + newBucketCount > limits.buckets ||
+      referenceCount + keys.length > limits.references
+    ) {
+      switchToScan();
+      continue;
+    }
+    for (const key of keys) {
+      const bucket = buckets.get(key);
+      if (bucket === undefined) buckets.set(key, [eventIndex]);
+      else bucket.push(eventIndex);
+    }
+    referenceCount += keys.length;
+  }
+
+  const frozenBuckets = new Map<string, readonly number[]>();
+  if (hashActive) {
+    for (const [key, indexes] of buckets) frozenBuckets.set(key, Object.freeze([...indexes]));
+  }
+  const mode = hashActive ? 'hash' : 'scan';
+  const stats: PageHitIndexStats = Object.freeze({
+    mode,
+    bucketCount: mode === 'hash' ? frozenBuckets.size : 0,
+    referenceCount: mode === 'hash' ? referenceCount : 0,
+    globalEventCount,
+    oversizedEventCount,
+  });
+  return Object.freeze({
+    events,
+    mode,
+    buckets: frozenBuckets,
+    globalEventIndexes: Object.freeze(hashActive ? [...globalEventIndexes] : []),
+    oversizedEventIndexes: Object.freeze(hashActive ? [...oversizedEventIndexes] : []),
+    globalEventFlags: Object.freeze([...globalEventFlags]),
+    limits,
+    stats,
+  });
 }
 
 function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[]> {
@@ -328,12 +532,13 @@ function replayChain(
   chain: ClipChain,
   query: Polygon,
   memo: Map<ClipChain, Result<Polygon>>,
+  metrics: MutablePageHitQueryMetrics,
 ): Result<Polygon> {
   const cached = memo.get(chain);
   if (cached !== undefined) return cached;
 
   const incoming =
-    chain.previous === null ? success(query) : replayChain(chain.previous, query, memo);
+    chain.previous === null ? success(query) : replayChain(chain.previous, query, memo, metrics);
   if (!incoming.ok) {
     memo.set(chain, incoming);
     return incoming;
@@ -344,6 +549,7 @@ function replayChain(
     return empty;
   }
 
+  metrics.clipOperations += 1;
   const clipped = clipConvexPolygon(incoming.value, chain.polygon, chain.path);
   memo.set(chain, clipped);
   return clipped;
@@ -353,57 +559,153 @@ function replayIncomingChain(
   event: PreparedEvent,
   query: Polygon,
   memo: Map<ClipChain, Result<Polygon>>,
+  metrics: MutablePageHitQueryMetrics,
 ): Result<Polygon> {
   const chain = event.kind === 'clip' ? event.incomingChain : event.chain;
-  return chain === null ? success(query) : replayChain(chain, query, memo);
+  return chain === null ? success(query) : replayChain(chain, query, memo, metrics);
 }
 
-function queryEvents(events: readonly PreparedEvent[], rect: PageRect): Result<readonly NodeId[]> {
+function queryEvents(
+  prepared: PreparedPageHitIndex,
+  rect: PageRect,
+): Readonly<{ result: Result<readonly NodeId[]>; metrics: PageHitQueryMetrics }> {
+  const mutableMetrics: MutablePageHitQueryMetrics = {
+    cellIterations: 0,
+    bucketReferencesRead: 0,
+    uniqueAabbChecks: 0,
+    narrowPhaseCalls: 0,
+    clipOperations: 0,
+    usedScanFallback: false,
+  };
+  const finish = (
+    result: Result<readonly NodeId[]>,
+  ): Readonly<{ result: Result<readonly NodeId[]>; metrics: PageHitQueryMetrics }> =>
+    Object.freeze({ result, metrics: Object.freeze({ ...mutableMetrics }) });
+
   const normalized = normalizePageRect(rect);
-  if (!normalized.ok) return failureResult(normalized.error);
+  if (!normalized.ok) return finish(failureResult(normalized.error));
   const query = normalizedPageRectPolygon(normalized.value);
-  const queryBounds = polygonBounds(query);
-  if (queryBounds === null) return success(frozenEmptyIds());
+  const rawQueryBounds = polygonBounds(query);
+  if (rawQueryBounds === null) return finish(success(frozenEmptyIds()));
+  const queryBounds = haloBounds(rawQueryBounds);
+
+  const eventIndexes = new Set<number>();
+  const useMasterScan = (): void => {
+    mutableMetrics.usedScanFallback = true;
+    for (let index = 0; index < prepared.events.length; index += 1) eventIndexes.add(index);
+  };
+
+  if (prepared.mode === 'scan' || queryBounds === null) {
+    useMasterScan();
+  } else {
+    const range = cellRange(queryBounds);
+    if (range === null || range.count > prepared.limits.queryCells) {
+      useMasterScan();
+    } else {
+      for (const index of prepared.globalEventIndexes) eventIndexes.add(index);
+      for (let y = range.minY; y <= range.maxY; y += 1) {
+        for (let x = range.minX; x <= range.maxX; x += 1) {
+          mutableMetrics.cellIterations += 1;
+          const bucket = prepared.buckets.get(cellKey(x, y));
+          if (bucket === undefined) continue;
+          mutableMetrics.bucketReferencesRead += bucket.length;
+          for (const index of bucket) eventIndexes.add(index);
+        }
+      }
+      for (const index of prepared.oversizedEventIndexes) eventIndexes.add(index);
+    }
+  }
+
+  const orderedIndexes = [...eventIndexes].sort(
+    (left, right) => prepared.events[left]!.order - prepared.events[right]!.order,
+  );
 
   const hits: NodeId[] = [];
   const clipMemo = new Map<ClipChain, Result<Polygon>>();
-  for (const event of events) {
+  for (const eventIndex of orderedIndexes) {
+    const event = prepared.events[eventIndex]!;
     const activationBounds = eventActivationBounds(event);
-    if (activationBounds !== null && !boundsIntersect(activationBounds, queryBounds)) continue;
+    if (!prepared.globalEventFlags[eventIndex] && activationBounds !== null) {
+      mutableMetrics.uniqueAabbChecks += 1;
+      if (queryBounds !== null && !boundsIntersect(activationBounds, queryBounds)) continue;
+    }
 
-    const reachable = replayIncomingChain(event, query, clipMemo);
-    if (!reachable.ok) return failureResult(reachable.error);
+    const reachable = replayIncomingChain(event, query, clipMemo, mutableMetrics);
+    if (!reachable.ok) return finish(failureResult(reachable.error));
     if (reachable.value.length === 0) continue;
 
-    if (event.kind === 'error') return failureResult(event.error);
+    if (event.kind === 'error') return finish(failureResult(event.error));
     if (event.kind === 'clip') {
-      const clipped = replayChain(event.ownChain, query, clipMemo);
-      if (!clipped.ok) return failureResult(clipped.error);
+      const clipped = replayChain(event.ownChain, query, clipMemo, mutableMetrics);
+      if (!clipped.ok) return finish(failureResult(clipped.error));
       continue;
     }
 
+    mutableMetrics.narrowPhaseCalls += 1;
     const hit = preparedCandidateIntersects(event.candidate, reachable.value);
-    if (!hit.ok) return failureResult(hit.error);
+    if (!hit.ok) return finish(failureResult(hit.error));
     if (hit.value) hits.push(event.candidate.id);
   }
 
-  return success(Object.freeze([...hits]));
+  return finish(success(Object.freeze([...hits])));
+}
+
+function createPageHitIndexWithLimits(
+  document: BringsDocument,
+  limits: PageHitIndexLimits,
+): Result<PageHitIndex> {
+  const prepared = prepareEvents(document);
+  if (!prepared.ok) return failureResult(prepared.error);
+  const spatial = prepareSpatialIndex(prepared.value, limits);
+  const index: PageHitIndex = {
+    intersect(rect) {
+      return queryEvents(spatial, rect).result;
+    },
+    hitTest(point) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return frozenEmptyIds();
+      const result = queryEvents(spatial, {
+        x: point.x,
+        y: point.y,
+        width: 0,
+        height: 0,
+      }).result;
+      return result.ok ? Object.freeze([...result.value].reverse()) : frozenEmptyIds();
+    },
+  };
+  const frozenIndex = Object.freeze(index);
+  PAGE_HIT_INDEX_DATA.set(frozenIndex, spatial);
+  return success(frozenIndex);
 }
 
 /** Prepare an immutable ordered exact-query index for one document snapshot. */
 export function createPageHitIndex(document: BringsDocument): Result<PageHitIndex> {
-  const prepared = prepareEvents(document);
-  if (!prepared.ok) return failureResult(prepared.error);
-  const events = prepared.value;
-  const index: PageHitIndex = {
-    intersect(rect) {
-      return queryEvents(events, rect);
-    },
-    hitTest(point) {
-      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return frozenEmptyIds();
-      const result = queryEvents(events, { x: point.x, y: point.y, width: 0, height: 0 });
-      return result.ok ? Object.freeze([...result.value].reverse()) : frozenEmptyIds();
-    },
-  };
-  return success(Object.freeze(index));
+  return createPageHitIndexWithLimits(document, DEFAULT_PAGE_HIT_INDEX_LIMITS);
+}
+
+/** Build the production index with explicit limits for deterministic source tests. */
+export function createPageHitIndexForTesting(
+  document: BringsDocument,
+  limits: PageHitIndexLimits,
+): Result<PageHitIndex> {
+  return createPageHitIndexWithLimits(document, limits);
+}
+
+/** Inspect one indexed query without publishing diagnostics from the package root. */
+export function inspectPageHitIndex(
+  index: PageHitIndex,
+  rect: PageRect,
+): Readonly<{
+  result: Result<readonly NodeId[]>;
+  metrics: PageHitQueryMetrics;
+  indexStats: PageHitIndexStats;
+}> {
+  const prepared = PAGE_HIT_INDEX_DATA.get(index);
+  if (prepared === undefined)
+    throw new TypeError('Expected a PageHitIndex created by this module.');
+  const inspected = queryEvents(prepared, rect);
+  return Object.freeze({
+    result: inspected.result,
+    metrics: inspected.metrics,
+    indexStats: prepared.stats,
+  });
 }

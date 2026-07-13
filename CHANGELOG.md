@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- 06fa914: Add atomic multi-selection deletion with active-page validation, lock protection,
+  empty-Group pruning, and selection-restoring undo/redo history.
+
 ## 0.6.0
 
 ### Minor Changes

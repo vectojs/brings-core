@@ -389,6 +389,83 @@ function createRectangle(
   });
 }
 
+function deleteNodes(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'delete-nodes' }>,
+): Result<DocumentContent> {
+  if (!Array.isArray(command.nodeIds)) return failure('value.array', '/nodeIds');
+  if (command.nodeIds.length === 0) return failure('array.empty', '/nodeIds');
+
+  const byId = nodeMap(before);
+  const targets: SceneNode[] = [];
+  const targetIds = new Set<string>();
+  for (let index = 0; index < command.nodeIds.length; index += 1) {
+    const id = commandId(command.nodeIds[index]!, `/nodeIds/${index}`);
+    if (!id.ok) return id;
+    if (targetIds.has(id.value)) continue;
+    const target = byId.get(id.value)?.node;
+    if (target === undefined) return failure('node.not-found', `/nodeIds/${index}`);
+    if (pageForNode(before, target.id) !== before.activePageId) {
+      return failure('command.source-page-mismatch', `/nodeIds/${index}`);
+    }
+    targetIds.add(target.id);
+    targets.push(target);
+  }
+
+  const roots = targets.filter((target) => {
+    let parentId = target.parentId;
+    while (parentId !== null) {
+      if (targetIds.has(parentId)) return false;
+      parentId = byId.get(parentId)?.node.parentId ?? null;
+    }
+    return true;
+  });
+
+  const deleted = new Set<string>();
+  const protectedIds = new Set<string>();
+  for (const root of roots) {
+    for (const id of subtreeIds(before, root.id)) {
+      deleted.add(id);
+      protectedIds.add(id);
+    }
+    for (const id of ancestorIds(before, root.id)) protectedIds.add(id);
+  }
+  const locked = firstLocked(before, protectedIds);
+  if (!locked.ok) return locked;
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of before.nodes) {
+      if (
+        node.type === 'group' &&
+        node.childIds.length > 0 &&
+        !deleted.has(node.id) &&
+        node.childIds.every((childId) => deleted.has(childId))
+      ) {
+        deleted.add(node.id);
+        changed = true;
+      }
+    }
+  }
+
+  const pages = before.pages.map((page) => ({
+    ...page,
+    rootNodeIds: page.rootNodeIds.filter((rootId) => !deleted.has(rootId)),
+  }));
+  const nodes = before.nodes
+    .filter((node) => !deleted.has(node.id))
+    .map((node) =>
+      isContainer(node)
+        ? withChildIds(
+            node,
+            node.childIds.filter((childId) => !deleted.has(childId)),
+          )
+        : cloneNode(node),
+    );
+  return commitCandidate(before, withPagesAndNodes(before, pages, nodes));
+}
+
 function deleteNode(
   before: BringsDocument,
   command: Extract<DocumentCommandInput, { kind: 'delete-node' }>,
@@ -536,6 +613,8 @@ export function planCommand(
       return insertSubtree(before, command);
     case 'apply-transform-delta':
       return applyTransformDelta(before, command);
+    case 'delete-nodes':
+      return deleteNodes(before, command);
     case 'delete-node':
       return deleteNode(before, command);
     default:

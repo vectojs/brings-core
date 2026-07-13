@@ -302,4 +302,5 @@ export type DocumentCommandInput =
       nodes: readonly SceneNodeInput[];
     }>
   | Readonly<{ kind: 'apply-transform-delta' } & TransformDeltaInput>
+  | Readonly<{ kind: 'delete-nodes'; nodeIds: readonly string[] }>
   | Readonly<{ kind: 'delete-node'; nodeId: string }>;

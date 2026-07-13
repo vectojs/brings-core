@@ -104,10 +104,16 @@ type PageHitIndexStats = Readonly<{
   oversizedEventCount: number;
 }>;
 
+type PageHitBucket = number | readonly number[];
+type PageHitBucketRow = ReadonlyMap<number, PageHitBucket>;
+type PageHitBuckets = ReadonlyMap<number, PageHitBucketRow>;
+type MutablePageHitBucket = number | number[];
+type MutablePageHitBuckets = Map<number, Map<number, MutablePageHitBucket>>;
+
 type PreparedPageHitIndex = Readonly<{
   events: readonly PreparedEvent[];
   mode: 'hash' | 'scan';
-  buckets: ReadonlyMap<string, readonly number[]>;
+  buckets: PageHitBuckets;
   globalEventIndexes: readonly number[];
   oversizedEventIndexes: readonly number[];
   globalEventFlags: readonly boolean[];
@@ -258,10 +264,6 @@ function cellRange(bounds: Bounds): CellRange | null {
   return Object.freeze({ minX, minY, maxX, maxY, count: columns * rows });
 }
 
-function cellKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
-
 function isGlobalEvent(event: PreparedEvent): boolean {
   if (eventActivationBounds(event) === null) return true;
   if (event.kind === 'clip' && event.incomingChain === null) return true;
@@ -289,11 +291,12 @@ function prepareSpatialIndex(
   requestedLimits: PageHitIndexLimits,
 ): PreparedPageHitIndex {
   const limits = validateLimits(requestedLimits);
-  const buckets = new Map<string, number[]>();
+  const buckets: MutablePageHitBuckets = new Map();
   const globalEventIndexes: number[] = [];
   const oversizedEventIndexes: number[] = [];
   const globalEventFlags: boolean[] = [];
   let hashActive = true;
+  let bucketCount = 0;
   let referenceCount = 0;
   let globalEventCount = 0;
   let oversizedEventCount = 0;
@@ -304,6 +307,7 @@ function prepareSpatialIndex(
     buckets.clear();
     globalEventIndexes.length = 0;
     oversizedEventIndexes.length = 0;
+    bucketCount = 0;
     referenceCount = 0;
   };
 
@@ -330,38 +334,55 @@ function prepareSpatialIndex(
     }
     if (!hashActive) continue;
 
-    const keys: string[] = [];
     let newBucketCount = 0;
     for (let y = range.minY; y <= range.maxY; y += 1) {
+      const row = buckets.get(y);
       for (let x = range.minX; x <= range.maxX; x += 1) {
-        const key = cellKey(x, y);
-        keys.push(key);
-        if (!buckets.has(key)) newBucketCount += 1;
+        if (row?.has(x) !== true) newBucketCount += 1;
       }
     }
     if (
-      buckets.size + newBucketCount > limits.buckets ||
-      referenceCount + keys.length > limits.references
+      bucketCount + newBucketCount > limits.buckets ||
+      referenceCount + range.count > limits.references
     ) {
       switchToScan();
       continue;
     }
-    for (const key of keys) {
-      const bucket = buckets.get(key);
-      if (bucket === undefined) buckets.set(key, [eventIndex]);
-      else bucket.push(eventIndex);
+    for (let y = range.minY; y <= range.maxY; y += 1) {
+      let row = buckets.get(y);
+      if (row === undefined) {
+        row = new Map();
+        buckets.set(y, row);
+      }
+      for (let x = range.minX; x <= range.maxX; x += 1) {
+        const bucket = row.get(x);
+        if (bucket === undefined) {
+          row.set(x, eventIndex);
+          bucketCount += 1;
+        } else if (typeof bucket === 'number') {
+          row.set(x, [bucket, eventIndex]);
+        } else {
+          bucket.push(eventIndex);
+        }
+      }
     }
-    referenceCount += keys.length;
+    referenceCount += range.count;
   }
 
-  const frozenBuckets = new Map<string, readonly number[]>();
   if (hashActive) {
-    for (const [key, indexes] of buckets) frozenBuckets.set(key, Object.freeze([...indexes]));
+    for (const row of buckets.values()) {
+      for (const bucket of row.values()) {
+        if (Array.isArray(bucket)) Object.freeze(bucket);
+      }
+      Object.freeze(row);
+    }
+    Object.freeze(buckets);
   }
+  const frozenBuckets: PageHitBuckets = buckets;
   const mode = hashActive ? 'hash' : 'scan';
   const stats: PageHitIndexStats = Object.freeze({
     mode,
-    bucketCount: mode === 'hash' ? frozenBuckets.size : 0,
+    bucketCount: mode === 'hash' ? bucketCount : 0,
     referenceCount: mode === 'hash' ? referenceCount : 0,
     globalEventCount,
     oversizedEventCount,
@@ -376,6 +397,19 @@ function prepareSpatialIndex(
     limits,
     stats,
   });
+}
+
+function collectBucketEventIndexes(
+  bucket: PageHitBucket | undefined,
+  eventIndexes: Set<number>,
+): number {
+  if (bucket === undefined) return 0;
+  if (typeof bucket === 'number') {
+    eventIndexes.add(bucket);
+    return 1;
+  }
+  for (const index of bucket) eventIndexes.add(index);
+  return bucket.length;
 }
 
 function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[]> {
@@ -606,10 +640,10 @@ function queryEvents(
       for (let y = range.minY; y <= range.maxY; y += 1) {
         for (let x = range.minX; x <= range.maxX; x += 1) {
           mutableMetrics.cellIterations += 1;
-          const bucket = prepared.buckets.get(cellKey(x, y));
-          if (bucket === undefined) continue;
-          mutableMetrics.bucketReferencesRead += bucket.length;
-          for (const index of bucket) eventIndexes.add(index);
+          mutableMetrics.bucketReferencesRead += collectBucketEventIndexes(
+            prepared.buckets.get(y)?.get(x),
+            eventIndexes,
+          );
         }
       }
       for (const index of prepared.oversizedEventIndexes) eventIndexes.add(index);

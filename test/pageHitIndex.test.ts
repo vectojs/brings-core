@@ -768,6 +768,68 @@ test('classifies bounded, global, oversized, and duplicate hash events', () => {
   expect(inspectedOversized.indexStats.oversizedEventCount).toBe(2);
 });
 
+test('preserves ordered references when a singleton hash bucket becomes a collision', () => {
+  const singletonId = generatedNodeId(3);
+  const document = documentWith(
+    [
+      rectangle({ transform: [1, 0, 0, 1, 10, 10], width: 20, height: 20 }),
+      rectangle({
+        id: ids.rectangle2,
+        transform: [1, 0, 0, 1, 20, 20],
+        width: 20,
+        height: 20,
+      }),
+      rectangle({
+        id: singletonId,
+        transform: [1, 0, 0, 1, 1_100, 10],
+        width: 20,
+        height: 20,
+      }),
+    ],
+    [ids.rectangle, ids.rectangle2, singletonId],
+  );
+  const created = createPageHitIndex(document);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+
+  const collision = inspectPageHitIndex(created.value, {
+    x: 25,
+    y: 25,
+    width: 0,
+    height: 0,
+  });
+  expect(collision.result).toEqual({ ok: true, value: [ids.rectangle, ids.rectangle2] });
+  expect(collision.metrics).toEqual({
+    cellIterations: 1,
+    bucketReferencesRead: 2,
+    uniqueAabbChecks: 2,
+    narrowPhaseCalls: 2,
+    clipOperations: 0,
+    usedScanFallback: false,
+  });
+
+  const singleton = inspectPageHitIndex(created.value, {
+    x: 1_105,
+    y: 15,
+    width: 0,
+    height: 0,
+  });
+  expect(singleton.result).toEqual({ ok: true, value: [singletonId] });
+  expect(singleton.metrics).toEqual({
+    cellIterations: 1,
+    bucketReferencesRead: 1,
+    uniqueAabbChecks: 1,
+    narrowPhaseCalls: 1,
+    clipOperations: 0,
+    usedScanFallback: false,
+  });
+  expect(singleton.indexStats).toMatchObject({
+    mode: 'hash',
+    bucketCount: 2,
+    referenceCount: 3,
+  });
+});
+
 test('falls back atomically for large queries and allocation caps', () => {
   const document = documentWith(
     [

@@ -67,11 +67,6 @@ type ErrorEvent = Readonly<{
 
 type PreparedEvent = CandidateEvent | ClipEvent | ErrorEvent;
 
-type ChainExtension = Readonly<{
-  chain: ClipChain;
-  conservativelyEmpty: boolean;
-}>;
-
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 const GEOMETRY_EPSILON = 1e-9;
 
@@ -143,42 +138,35 @@ function intersectBounds(left: Bounds, right: Bounds): Bounds | 'empty' {
 function candidateActivationBounds(
   candidate: PreparedSelectionCandidate,
   chain: ClipChain | null,
-): Bounds | null | 'empty' {
+): Bounds | null {
   const candidateBounds = haloBounds(candidate.pageBounds);
   if (candidateBounds === null) return null;
-  if (chain === null || chain.activationBounds === null) return candidateBounds;
-  return intersectBounds(candidateBounds, chain.activationBounds);
+  if (chain === null) return candidateBounds;
+  if (chain.activationBounds === null) return null;
+  const intersection = intersectBounds(candidateBounds, chain.activationBounds);
+  return intersection === 'empty' ? null : intersection;
 }
 
-function extendClipChain(
-  previous: ClipChain | null,
-  polygon: Polygon,
-  path: string,
-): ChainExtension {
+function extendClipChain(previous: ClipChain | null, polygon: Polygon, path: string): ClipChain {
   const polygonCopy = freezePolygon(polygon);
   const rawBounds = polygonBounds(polygonCopy);
   const ownBounds = rawBounds === null ? null : haloBounds(rawBounds);
   let activationBounds: Bounds | null = ownBounds;
-  let conservativelyEmpty = false;
 
-  if (previous !== null && previous.activationBounds !== null && ownBounds !== null) {
-    const intersection = intersectBounds(previous.activationBounds, ownBounds);
-    if (intersection === 'empty') {
-      conservativelyEmpty = true;
-      activationBounds = ownBounds;
+  if (previous !== null) {
+    if (previous.activationBounds === null || ownBounds === null) {
+      activationBounds = null;
     } else {
-      activationBounds = intersection;
+      const intersection = intersectBounds(previous.activationBounds, ownBounds);
+      activationBounds = intersection === 'empty' ? null : intersection;
     }
   }
 
   return Object.freeze({
-    chain: Object.freeze({
-      previous,
-      polygon: polygonCopy,
-      path,
-      activationBounds,
-    }),
-    conservativelyEmpty,
+    previous,
+    polygon: polygonCopy,
+    path,
+    activationBounds,
   });
 }
 
@@ -231,9 +219,8 @@ function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[
     nodeIndex: number,
     parentMatrix: Matrix,
     incomingChain: ClipChain | null,
-    incomingConservativelyEmpty: boolean,
   ): boolean => {
-    if (terminal || !node.visible || node.locked || incomingConservativelyEmpty) return terminal;
+    if (terminal || !node.visible || node.locked) return terminal;
 
     const path = nodeTransformPath(nodeIndex);
     const pageMatrix = multiplyMatrices(parentMatrix, node.transform);
@@ -250,24 +237,21 @@ function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[
     if (!prepared.ok) return recordError(prepared.error, incomingChain);
     if (prepared.value !== null) {
       const insertionBounds = candidateActivationBounds(prepared.value, incomingChain);
-      if (insertionBounds !== 'empty') {
-        events.push(
-          Object.freeze({
-            kind: 'candidate',
-            order,
-            candidate: prepared.value,
-            chain: incomingChain,
-            insertionBounds,
-          }),
-        );
-        order += 1;
-      }
+      events.push(
+        Object.freeze({
+          kind: 'candidate',
+          order,
+          candidate: prepared.value,
+          chain: incomingChain,
+          insertionBounds,
+        }),
+      );
+      order += 1;
     }
 
     if (node.type !== 'frame' && node.type !== 'group') return false;
 
     let childChain = incomingChain;
-    let childConservativelyEmpty: boolean = incomingConservativelyEmpty;
     if (node.type === 'frame' && node.clipChildren) {
       const clip = transformPolygon(
         pageMatrix,
@@ -276,9 +260,7 @@ function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[
       );
       if (!clip.ok) return recordError(clip.error, incomingChain);
 
-      const extension = extendClipChain(incomingChain, clip.value, path);
-      childChain = extension.chain;
-      childConservativelyEmpty = extension.conservativelyEmpty;
+      childChain = extendClipChain(incomingChain, clip.value, path);
       events.push(
         Object.freeze({
           kind: 'clip',
@@ -310,7 +292,7 @@ function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[
         if (shouldStop) return true;
         continue;
       }
-      if (visit(entry.node, entry.index, pageMatrix, childChain, childConservativelyEmpty)) {
+      if (visit(entry.node, entry.index, pageMatrix, childChain)) {
         return true;
       }
     }
@@ -335,7 +317,7 @@ function prepareEvents(document: BringsDocument): Result<readonly PreparedEvent[
       );
       break;
     }
-    if (visit(root.node, root.index, IDENTITY, null, false)) break;
+    if (visit(root.node, root.index, IDENTITY, null)) break;
   }
 
   if (immediateError !== null) return failureResult(immediateError);

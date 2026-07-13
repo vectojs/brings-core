@@ -18,6 +18,7 @@ const ids = {
   frame: '33333333-3333-4333-8333-333333333333' as NodeId,
   rectangle: '44444444-4444-4444-8444-444444444444' as NodeId,
   ellipse: '55555555-5555-4555-8555-555555555555' as NodeId,
+  text: '66666666-6666-4666-8666-666666666666' as NodeId,
   group: '77777777-7777-4777-8777-777777777777' as NodeId,
   rectangle2: '88888888-8888-4888-8888-888888888888' as NodeId,
   clip: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' as NodeId,
@@ -87,6 +88,30 @@ function ellipse(overrides: Record<string, unknown> = {}): SceneNodeInput {
     height: 10,
     fill: paint,
     stroke: null,
+    ...overrides,
+  } as SceneNodeInput;
+}
+
+function text(overrides: Record<string, unknown> = {}): SceneNodeInput {
+  return {
+    id: ids.text,
+    type: 'text',
+    name: 'Text',
+    parentId: null,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    transform: [1, 0, 0, 1, 0, 0],
+    content: 'Brings',
+    fontFamilies: ['sans-serif'],
+    fontWeight: 400,
+    fontSize: 16,
+    lineHeight: 20,
+    horizontalAlign: 'left',
+    layoutMode: 'fixedBox',
+    width: 80,
+    height: 20,
+    fill: paint,
     ...overrides,
   } as SceneNodeInput;
 }
@@ -178,6 +203,194 @@ test('matches direct traversal for exact silhouettes, order, and nested clipping
     { x: -50, y: -50, width: 300, height: 300 },
     { x: 250, y: 250, width: -300, height: -300 },
   ]);
+});
+
+test('does not omit exact descendants when conservative clip bounds are disjoint', () => {
+  const document = documentWith(
+    [
+      frame({
+        id: ids.clip,
+        transform: [
+          1.0644880076870322, -0.07736642565578222, 0.12247125478461385, 1.8750126101076603,
+          -845444.327685982, -747405.563481152,
+        ],
+        width: 4309.575462248176,
+        height: 8456.978374160826,
+        childIds: [ids.nestedClip],
+        clipChildren: true,
+      }),
+      frame({
+        id: ids.nestedClip,
+        parentId: ids.clip,
+        transform: [
+          0.343016360886395, 0.12618815898895264, -0.1825229679234326, 0.8579063881188631,
+          -212522.2790054977, -174325.68036019802,
+        ],
+        width: 5580.095753539354,
+        height: 1244.839821010828,
+        childIds: [ids.ellipse],
+      }),
+      ellipse({
+        parentId: ids.nestedClip,
+        transform: [
+          -1.3147525684908032, -0.787397631444037, -0.5703434399329126, -0.884436771273613,
+          913783.8403694332, 519026.8764272332,
+        ],
+        width: 3469.8125813156366,
+        height: 2147.5941385142505,
+      }),
+    ],
+    [ids.clip],
+  );
+  const query = {
+    x: -7.168684201315046e148,
+    y: -6.856599356979123e148,
+    width: 6.61689188797027e149,
+    height: 6.691183168441058e149,
+  } as const;
+  const direct = intersectPageRect(document, query);
+  expect(direct).toEqual({ ok: true, value: [ids.clip, ids.ellipse] });
+
+  const created = createPageHitIndex(document);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  expect(created.value.intersect(query)).toEqual(direct);
+});
+
+test('matches the direct oracle across established silhouettes, traversal, and errors', () => {
+  const cosine = Math.SQRT1_2;
+  const hidden = documentWith([rectangle({ visible: false })], [ids.rectangle]);
+  const locked = documentWith([rectangle({ locked: true })], [ids.rectangle]);
+  const validSingular = documentWith(
+    [frame({ childIds: [ids.rectangle] }), rectangle({ parentId: ids.frame })],
+    [ids.frame],
+  );
+  const singular = {
+    ...validSingular,
+    nodes: validSingular.nodes.map((node, index) =>
+      index === 0 ? { ...node, transform: [1, 0, 0, 0, 0, 0] as const } : node,
+    ),
+  } as BringsDocument;
+  const siblings = documentWith(
+    [
+      rectangle({ width: 80, height: 80 }),
+      rectangle({ id: ids.rectangle2, width: 80, height: 80 }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+  const affine = [1, 0.5, 0.25, 1, 100, 50] as const;
+  const affineClip = documentWith(
+    [
+      frame({
+        transform: affine,
+        childIds: [ids.rectangle],
+        stroke: { paint, width: 20 },
+        clipChildren: true,
+      }),
+      rectangle({
+        parentId: ids.frame,
+        transform: [1, 0, 0, 1, 80, 40],
+        width: 40,
+        height: 20,
+        stroke: { paint, width: 4 },
+      }),
+    ],
+    [ids.frame],
+  );
+  const validMissingChild = documentWith(
+    [frame({ childIds: [ids.rectangle], clipChildren: true }), rectangle({ parentId: ids.frame })],
+    [ids.frame],
+  );
+  const missingChild = {
+    ...validMissingChild,
+    nodes: validMissingChild.nodes.map((node, index) =>
+      index === 0 ? { ...node, childIds: [ids.missing] } : node,
+    ),
+  } as BringsDocument;
+  const laterOverflow = documentWith(
+    [
+      rectangle({ width: 20, height: 20 }),
+      rectangle({
+        id: ids.rectangle2,
+        transform: [Number.MAX_VALUE, 0, 0, 1, Number.MAX_VALUE, 0],
+        width: 2,
+        height: 1,
+      }),
+    ],
+    [ids.rectangle, ids.rectangle2],
+  );
+
+  const cases: readonly Readonly<{
+    name: string;
+    document: BringsDocument;
+    rect: PageRect;
+  }>[] = [
+    {
+      name: 'measured Text box',
+      document: documentWith([text({ transform: [1, 0, 0, 1, 200, 20] })], [ids.text]),
+      rect: { x: 210, y: 25, width: 0, height: 0 },
+    },
+    { name: 'hidden node', document: hidden, rect: { x: 0, y: 0, width: 500, height: 500 } },
+    { name: 'locked node', document: locked, rect: { x: 0, y: 0, width: 500, height: 500 } },
+    {
+      name: 'singular subtree',
+      document: singular,
+      rect: { x: 0, y: 0, width: 500, height: 500 },
+    },
+    {
+      name: 'rotated AABB-only miss',
+      document: documentWith(
+        [
+          rectangle({
+            transform: [cosine, cosine, -cosine, cosine, 100, 0],
+            width: 100,
+            height: 100,
+          }),
+        ],
+        [ids.rectangle],
+      ),
+      rect: { x: 29.3, y: 0, width: 1, height: 1 },
+    },
+    {
+      name: 'overlapping sibling order',
+      document: siblings,
+      rect: { x: 20, y: 20, width: 10, height: 10 },
+    },
+    {
+      name: 'affine clipped centered stroke',
+      document: affineClip,
+      rect: {
+        x: affine[0] * 78 + affine[2] * 50 + affine[4],
+        y: affine[1] * 78 + affine[3] * 50 + affine[5],
+        width: 0,
+        height: 0,
+      },
+    },
+    {
+      name: 'deferred missing-child error',
+      document: missingChild,
+      rect: { x: 1, y: 1, width: 0, height: 0 },
+    },
+    {
+      name: 'later exact-computation error',
+      document: laterOverflow,
+      rect: { x: 0, y: 0, width: 10, height: 10 },
+    },
+  ];
+
+  for (const fixture of cases) {
+    const direct = intersectPageRect(fixture.document, fixture.rect);
+    const created = createPageHitIndex(fixture.document);
+    expect(created.ok, fixture.name).toBe(true);
+    if (!created.ok) continue;
+    expect(created.value.intersect(fixture.rect), fixture.name).toEqual(direct);
+    if (fixture.rect.width === 0 && fixture.rect.height === 0) {
+      const point = { x: fixture.rect.x, y: fixture.rect.y };
+      expect(created.value.hitTest(point), fixture.name).toEqual(
+        hitTestPage(fixture.document, point),
+      );
+    }
+  }
 });
 
 test('returns fresh frozen results from one reusable index', () => {

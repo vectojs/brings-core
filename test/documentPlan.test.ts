@@ -624,6 +624,32 @@ test('keeps atomic delete failures byte-identical for missing, inactive, and loc
   );
 });
 
+test('rejects atomic deletion through a locked ancestor without mutating the source', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+  const lockedAncestor = unwrap(
+    validateDocument({
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === ids.frame ? { ...node, locked: true } : node,
+      ),
+    }),
+  );
+  const json = JSON.stringify(lockedAncestor);
+
+  expect(
+    planCommand(lockedAncestor, {
+      kind: 'delete-nodes',
+      nodeIds: [ids.rectangle],
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'node.locked', path: '/nodes/0/locked' },
+  });
+  expect(JSON.stringify(lockedAncestor)).toBe(json);
+});
+
 test('does not prune an unrelated Group that was already empty before atomic deletion', () => {
   const before = initialDocument();
   const inserted = unwrap(planCommand(before, frameCommand()));

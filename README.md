@@ -21,8 +21,12 @@ indexes; page-space affine transform deltas; and atomic undo/redo with monotonic
 revisions.
 
 The Core accepts caller-provided lowercase RFC-4122 UUIDs and has no random-ID
-policy. Every public operation returns `Result<T>` with a stable machine error
-code and JSON Pointer path. Returned values are detached snapshots.
+policy. Fallible document, selection, index-construction, and rectangle-query
+boundaries return `Result<T>` with a stable machine error code and JSON Pointer
+path. `hitTestPage` and `PageHitIndex.hitTest` instead preserve a non-throwing
+point-query contract and return an empty array on invalid input or geometry
+failure. Validated document values and store snapshots are detached from
+caller-owned input and expose readonly public types.
 
 ```ts
 import {

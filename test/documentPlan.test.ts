@@ -451,3 +451,175 @@ test('prunes a Group that becomes empty while preserving its Frame', () => {
   expect(result.value.nodes).toHaveLength(1);
   expect(result.value.nodes[0]).toMatchObject({ id: ids.frame, childIds: [] });
 });
+
+test('applies a page-space transform delta to a nested node without retaining command values', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = unwrap(
+    validateDocument({
+      id: before.id,
+      revision: 1,
+      ...inserted,
+      nodes: inserted.nodes.map((node) =>
+        node.id === ids.frame ? { ...node, transform: [2, 0, 0, 2, 100, 50] } : node,
+      ),
+    }),
+  );
+  const command = {
+    kind: 'apply-transform-delta' as const,
+    nodeIds: [ids.rectangle],
+    delta: [1, 0, 0, 1, 10, -6],
+  };
+  const result = planCommand(document, command);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: { nodes: [{ id: ids.frame }, { id: ids.rectangle, transform: [1, 0, 0, 1, 25, 17] }] },
+  });
+  if (!result.ok) return;
+  command.delta[4] = 999;
+  expect(result.value.nodes[1]?.transform).toEqual([1, 0, 0, 1, 25, 17]);
+});
+
+test('applies one delta atomically to multiple top-level transform targets', () => {
+  const before = initialDocument();
+  const insertedFrame = unwrap(planCommand(before, frameCommand()));
+  const withFrame = documentFromContent(before, insertedFrame, 1);
+  const insertedRoot = unwrap(
+    planCommand(withFrame, {
+      kind: 'insert-subtree',
+      pageId: ids.page1,
+      parentId: null,
+      index: 1,
+      rootId: ids.child,
+      nodes: [
+        {
+          id: ids.child,
+          type: 'rectangle',
+          name: 'Root rectangle',
+          parentId: null,
+          visible: true,
+          locked: false,
+          opacity: 1,
+          transform: [1, 0, 0, 1, 500, 60],
+          width: 40,
+          height: 30,
+          cornerRadii: [0, 0, 0, 0],
+          fill: null,
+          stroke: null,
+        },
+      ],
+    }),
+  );
+  const document = documentFromContent(withFrame, insertedRoot, 2);
+
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame, ids.child],
+      delta: [1, 0, 0, 1, 3, 4],
+    }),
+  ).toMatchObject({
+    ok: true,
+    value: {
+      nodes: [
+        { id: ids.frame, transform: [1, 0, 0, 1, 3, 4] },
+        { id: ids.rectangle, transform: [1, 0, 0, 1, 20, 20] },
+        { id: ids.child, transform: [1, 0, 0, 1, 503, 64] },
+      ],
+    },
+  });
+});
+
+test('rejects malformed and structurally overlapping transform targets', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'array.empty', path: '/nodeIds' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame, ids.frame],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'id.duplicate', path: '/nodeIds/1' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.document],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'node.not-found', path: '/nodeIds/0' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame, ids.rectangle],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.transform-overlap', path: '/nodeIds/1' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame],
+      delta: [Number.NaN, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'matrix.invalid', path: '/delta/0' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame],
+      delta: [1, 0, 0, 0, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'matrix.singular', path: '/delta' } });
+  expect(
+    planCommand(document, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame],
+      delta: [1, 0, 0, 1, 0, 0],
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.no-change', path: '/' } });
+});
+
+test('rejects locked and inactive-page transform targets before mutation', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const document = documentFromContent(before, inserted, 1);
+  const locked = unwrap(
+    validateDocument({
+      ...document,
+      nodes: document.nodes.map((node) =>
+        node.id === ids.frame ? { ...node, locked: true } : node,
+      ),
+    }),
+  );
+
+  expect(
+    planCommand(locked, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.rectangle],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({ ok: false, error: { code: 'node.locked', path: '/nodes/0/locked' } });
+
+  const page2 = unwrap(
+    planCommand(document, { kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }),
+  );
+  const inactive = documentFromContent(document, page2, 2);
+  expect(
+    planCommand(inactive, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame],
+      delta: [1, 0, 0, 1, 1, 1],
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'command.source-page-mismatch', path: '/nodeIds/0' },
+  });
+});

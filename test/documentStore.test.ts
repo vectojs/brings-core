@@ -338,3 +338,66 @@ test('rejects revision overflow without constructing an unsafe revision', () => 
     error: { code: 'revision.overflow', path: '/revision' },
   });
 });
+
+test('records one transform intention while preserving selection through undo and redo', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  expect(store.setSelection({ nodeIds: [ids.rectangle], activeNodeId: ids.rectangle }).ok).toBe(
+    true,
+  );
+
+  expect(
+    store.execute({
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.rectangle],
+      delta: [1, 0, 0, 1, 10, -5],
+    }).ok,
+  ).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: {
+      revision: 2,
+      nodes: [{ id: ids.frame }, { id: ids.rectangle, transform: [1, 0, 0, 1, 30, 15] }],
+    },
+    selection: { nodeIds: [ids.rectangle], activeNodeId: ids.rectangle },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: {
+      revision: 3,
+      nodes: [{ id: ids.frame }, { id: ids.rectangle, transform: [1, 0, 0, 1, 20, 20] }],
+    },
+    selection: { nodeIds: [ids.rectangle], activeNodeId: ids.rectangle },
+    undoDepth: 1,
+    redoDepth: 1,
+  });
+
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: {
+      revision: 4,
+      nodes: [{ id: ids.frame }, { id: ids.rectangle, transform: [1, 0, 0, 1, 30, 15] }],
+    },
+    selection: { nodeIds: [ids.rectangle], activeNodeId: ids.rectangle },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+});
+
+test('leaves document selection and history byte-identical after a failed transform command', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  expect(store.setSelection({ nodeIds: [ids.frame], activeNodeId: ids.frame }).ok).toBe(true);
+  const before = JSON.stringify(store.snapshot());
+
+  expect(
+    store.execute({
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.frame],
+      delta: [1, 0, 0, 0, 10, 10],
+    }),
+  ).toEqual({ ok: false, error: { code: 'matrix.singular', path: '/delta' } });
+  expect(JSON.stringify(store.snapshot())).toBe(before);
+});

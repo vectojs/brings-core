@@ -35,6 +35,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Added atomic page-space transform-delta commands with parent-local matrix
+  derivation and selection-preserving undo/redo history.
 - Added strict schema-v1 document validation, canonical graph ordering, and
   detached snapshots.
 - Added transactional page/subtree command planning and an in-memory undo/redo

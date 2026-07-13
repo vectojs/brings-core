@@ -143,12 +143,13 @@ function createHistoryEntry(
   before: BringsDocument,
   after: DocumentContent,
   beforeSelection: StructuralSelection,
+  afterSelection: StructuralSelection,
 ): HistoryEntry {
   return {
     before: cloneDocumentContent(before),
     after: cloneContent(after),
     beforeSelection: cloneStructuralSelection(beforeSelection),
-    afterSelection: emptyStructuralSelection(),
+    afterSelection: cloneStructuralSelection(afterSelection),
   };
 }
 
@@ -190,9 +191,13 @@ class InMemoryBringsDocumentStore implements BringsDocumentStore {
       return success(this.snapshot());
     }
 
-    const entry = createHistoryEntry(this.document, planned.value, this.selection);
+    const afterSelection =
+      command.kind === 'apply-transform-delta'
+        ? cloneStructuralSelection(this.selection)
+        : emptyStructuralSelection();
+    const entry = createHistoryEntry(this.document, planned.value, this.selection, afterSelection);
     this.document = next.value;
-    this.selection = emptyStructuralSelection();
+    this.selection = afterSelection;
     this.undoEntries.push(entry);
     this.redoEntries.length = 0;
     return success(this.snapshot());

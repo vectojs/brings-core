@@ -3,6 +3,7 @@ export { createDocument, validateDocument } from './document/validate';
 export { resolveStructuralSelection } from './document/selection';
 export { createDocumentStore } from './document/store';
 export { hitTestPage, intersectPageRect, type PagePoint, type PageRect } from './geometry/hit';
+export { createPageHitIndex, type PageHitIndex } from './geometry/pageHitIndex';
 export type {
   BringsDocument,
   BringsDocumentInput,

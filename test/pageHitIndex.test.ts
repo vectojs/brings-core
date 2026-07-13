@@ -1,18 +1,19 @@
 import { expect, test } from 'bun:test';
 import {
+  createPageHitIndex,
   hitTestPage,
   intersectPageRect,
   validateDocument,
   type BringsDocument,
   type Matrix,
   type NodeId,
+  type PageHitIndex,
   type PageId,
   type PageRect,
   type SceneNodeInput,
   type UUID,
 } from '../src';
 import {
-  createPageHitIndex,
   createPageHitIndexForTesting,
   DEFAULT_PAGE_HIT_INDEX_LIMITS,
   inspectPageHitIndex,
@@ -166,6 +167,16 @@ function expectParity(document: BringsDocument, rects: readonly PageRect[]): voi
     }
   }
 }
+
+test('publishes the reusable page-hit index through the package root', () => {
+  const document = documentWith([rectangle({ transform: [1, 0, 0, 1, 20, 20] })], [ids.rectangle]);
+  const created = createPageHitIndex(document);
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+
+  const publicIndex: PageHitIndex = created.value;
+  expect(publicIndex.hitTest({ x: 25, y: 25 })).toEqual([ids.rectangle]);
+});
 
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0;

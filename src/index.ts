@@ -31,6 +31,7 @@ export type {
   StrokeInput,
   StructuralSelection,
   TextNode,
+  TransformDeltaInput,
   UUID,
 } from './document/types';
 export type { BringsDocumentStore, EditorSnapshot } from './document/store';

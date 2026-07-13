@@ -1,11 +1,18 @@
 import { cloneContent, cloneNode } from './clone';
-import { isLowercaseRfc4122Uuid, validateDetachedSubtree, validateDocument } from './validate';
+import { invertMatrix, multiplyMatrices, pageMatrixForNode } from '../geometry/matrix';
+import {
+  isLowercaseRfc4122Uuid,
+  validateDetachedSubtree,
+  validateDocument,
+  validateMatrixInput,
+} from './validate';
 import type {
   BringsDocument,
   DocumentCommandInput,
   DocumentContent,
   FrameNode,
   GroupNode,
+  Matrix,
   NodeId,
   Page,
   PageId,
@@ -421,6 +428,87 @@ function deleteNode(
   return commitCandidate(before, withPagesAndNodes(before, pages, nodes));
 }
 
+function isIdentityMatrix(matrix: Matrix): boolean {
+  return (
+    matrix[0] === 1 &&
+    matrix[1] === 0 &&
+    matrix[2] === 0 &&
+    matrix[3] === 1 &&
+    matrix[4] === 0 &&
+    matrix[5] === 0
+  );
+}
+
+function applyTransformDelta(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'apply-transform-delta' }>,
+): Result<DocumentContent> {
+  if (!Array.isArray(command.nodeIds)) return failure('value.array', '/nodeIds');
+  if (command.nodeIds.length === 0) return failure('array.empty', '/nodeIds');
+  const delta = validateMatrixInput(command.delta, '/delta');
+  if (!delta.ok) return delta;
+
+  const byId = nodeMap(before);
+  const targets: SceneNode[] = [];
+  const targetIds = new Set<string>();
+  for (let index = 0; index < command.nodeIds.length; index += 1) {
+    const id = commandId(command.nodeIds[index]!, `/nodeIds/${index}`);
+    if (!id.ok) return id;
+    if (targetIds.has(id.value)) return failure('id.duplicate', `/nodeIds/${index}`);
+    const target = byId.get(id.value)?.node;
+    if (target === undefined) return failure('node.not-found', `/nodeIds/${index}`);
+    if (pageForNode(before, target.id) !== before.activePageId) {
+      return failure('command.source-page-mismatch', `/nodeIds/${index}`);
+    }
+    targetIds.add(id.value);
+    targets.push(target);
+  }
+
+  for (let index = 0; index < targets.length; index += 1) {
+    let parentId = targets[index]!.parentId;
+    while (parentId !== null) {
+      if (targetIds.has(parentId)) {
+        return failure('command.transform-overlap', `/nodeIds/${index}`);
+      }
+      parentId = byId.get(parentId)?.node.parentId ?? null;
+    }
+  }
+
+  const protectedIds = new Set<string>();
+  for (const target of targets) {
+    for (const id of ancestorIds(before, target.id)) protectedIds.add(id);
+  }
+  const locked = firstLocked(before, protectedIds);
+  if (!locked.ok) return locked;
+  if (isIdentityMatrix(delta.value)) return failure('command.no-change', '/');
+
+  const transforms = new Map<string, Matrix>();
+  for (let index = 0; index < targets.length; index += 1) {
+    const target = targets[index]!;
+    const page = pageMatrixForNode(before, target.id, `/nodeIds/${index}`);
+    if (!page.ok) return page;
+    let inverseParent: Result<Matrix> = success([1, 0, 0, 1, 0, 0]);
+    if (target.parentId !== null) {
+      const parent = pageMatrixForNode(before, target.parentId, `/nodeIds/${index}`);
+      if (!parent.ok) return parent;
+      inverseParent = invertMatrix(parent.value, `/nodeIds/${index}`);
+    }
+    if (!inverseParent.ok) return inverseParent;
+    const local = multiplyMatrices(inverseParent.value, multiplyMatrices(delta.value, page.value));
+    const validated = validateMatrixInput(local, `/nodeIds/${index}/transform`);
+    if (!validated.ok) return validated;
+    transforms.set(target.id, validated.value);
+  }
+
+  const nodes = before.nodes.map((node) => {
+    const transform = transforms.get(node.id);
+    return transform === undefined
+      ? cloneNode(node)
+      : ({ ...cloneNode(node), transform } as SceneNode);
+  });
+  return commitCandidate(before, withPagesAndNodes(before, before.pages, nodes));
+}
+
 /** Plan one document command without mutating the supplied document or command. */
 export function planCommand(
   before: BringsDocument,
@@ -446,6 +534,8 @@ export function planCommand(
       return createRectangle(before, command);
     case 'insert-subtree':
       return insertSubtree(before, command);
+    case 'apply-transform-delta':
+      return applyTransformDelta(before, command);
     case 'delete-node':
       return deleteNode(before, command);
     default:

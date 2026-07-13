@@ -1,3 +1,4 @@
+import { MIN_MATRIX_DETERMINANT } from '../geometry/matrix';
 import type {
   BringsDocument,
   CommonNode,
@@ -31,7 +32,6 @@ const MAX_FONT_FAMILIES = 16;
 const MAX_FONT_FAMILY_SCALARS = 256;
 const MAX_FONT_MEASURE = 100_000;
 const MIN_FONT_MEASURE = 0.1;
-const MIN_DETERMINANT = 1e-12;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -179,7 +179,8 @@ function readUuidArray(
   return success(values);
 }
 
-function readMatrix(value: unknown, path: string): Result<Matrix> {
+/** Validate one raw affine matrix without retaining caller-owned array state. */
+export function validateMatrixInput(value: unknown, path: string): Result<Matrix> {
   if (!Array.isArray(value) || value.length !== 6) return failure('matrix.invalid', path);
   const values: number[] = [];
   for (let index = 0; index < value.length; index += 1) {
@@ -192,7 +193,7 @@ function readMatrix(value: unknown, path: string): Result<Matrix> {
     if (!number.ok) return failure('matrix.invalid', pathAt(path, index));
     values.push(number.value);
   }
-  if (Math.abs(values[0]! * values[3]! - values[1]! * values[2]!) < MIN_DETERMINANT) {
+  if (Math.abs(values[0]! * values[3]! - values[1]! * values[2]!) < MIN_MATRIX_DETERMINANT) {
     return failure('matrix.singular', path);
   }
   return success([values[0]!, values[1]!, values[2]!, values[3]!, values[4]!, values[5]!]);
@@ -262,7 +263,7 @@ function readCommonNode(record: UnknownRecord, path: string): Result<ParsedCommo
   if (!locked.ok) return locked;
   const opacity = readFiniteRange(record.opacity, pathAt(path, 'opacity'), 0, 1);
   if (!opacity.ok) return opacity;
-  const transform = readMatrix(record.transform, pathAt(path, 'transform'));
+  const transform = validateMatrixInput(record.transform, pathAt(path, 'transform'));
   if (!transform.ok) return transform;
   return success({
     id: id.value as NodeId,

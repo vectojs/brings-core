@@ -266,6 +266,12 @@ export type CreateFrameInput = Omit<FrameNodeInput, 'type' | 'parentId' | 'child
 /** Explicit mutable fields for the first Rectangle creation command. */
 export type CreateRectangleInput = Omit<RectangleNodeInput, 'type' | 'parentId'>;
 
+/** Raw targets and page-space affine delta for one transform intention. */
+export type TransformDeltaInput = Readonly<{
+  nodeIds: readonly string[];
+  delta: readonly number[];
+}>;
+
 /** The initial narrow command vocabulary for the document tracer. */
 export type DocumentCommandInput =
   | Readonly<{ kind: 'create-page'; id: string; name: string; index: number }>
@@ -295,4 +301,5 @@ export type DocumentCommandInput =
       rootId: string;
       nodes: readonly SceneNodeInput[];
     }>
+  | Readonly<{ kind: 'apply-transform-delta' } & TransformDeltaInput>
   | Readonly<{ kind: 'delete-node'; nodeId: string }>;

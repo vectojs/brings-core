@@ -1,16 +1,17 @@
 import type { BringsDocument, Matrix, NodeId, Result, SceneNode } from '../document/types';
 import {
-  boundsIntersect,
   clipConvexPolygon,
-  ellipseIntersectsPolygon,
-  localStrokeExpansion,
-  polygonBounds,
-  polygonsIntersect,
   rectanglePolygon,
   transformPolygon,
   type Polygon,
 } from './intersection';
-import { invertMatrix, MIN_MATRIX_DETERMINANT, multiplyMatrices } from './matrix';
+import {
+  normalizedPageRectPolygon,
+  normalizePageRect,
+  prepareSelectionCandidate,
+  preparedCandidateIntersects,
+} from './hitShared';
+import { MIN_MATRIX_DETERMINANT, multiplyMatrices } from './matrix';
 
 export type PagePoint = Readonly<{ x: number; y: number }>;
 
@@ -19,13 +20,6 @@ export type PageRect = Readonly<{
   y: number;
   width: number;
   height: number;
-}>;
-
-type NormalizedRect = Readonly<{
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
 }>;
 
 type NodeEntry = Readonly<{ node: SceneNode; index: number }>;
@@ -44,25 +38,6 @@ function nodeTransformPath(nodeIndex: number): string {
   return `/nodes/${nodeIndex}/transform`;
 }
 
-function normalizeRect(rect: PageRect): Result<NormalizedRect> {
-  for (const field of ['x', 'y', 'width', 'height'] as const) {
-    if (!Number.isFinite(rect[field])) {
-      return failure('geometry.rect-invalid', `/rect/${field}`);
-    }
-  }
-
-  const endX = rect.x + rect.width;
-  const endY = rect.y + rect.height;
-  if (!Number.isFinite(endX)) return failure('geometry.rect-overflow', '/rect/width');
-  if (!Number.isFinite(endY)) return failure('geometry.rect-overflow', '/rect/height');
-  return success({
-    minX: Math.min(rect.x, endX),
-    minY: Math.min(rect.y, endY),
-    maxX: Math.max(rect.x, endX),
-    maxY: Math.max(rect.y, endY),
-  });
-}
-
 function transformedRectangle(
   matrix: Matrix,
   x: number,
@@ -74,94 +49,16 @@ function transformedRectangle(
   return transformPolygon(matrix, rectanglePolygon(x, y, width, height), path);
 }
 
-function broadPhaseIntersects(candidate: Polygon, query: Polygon): boolean {
-  const candidateBounds = polygonBounds(candidate);
-  const queryBounds = polygonBounds(query);
-  return (
-    candidateBounds !== null &&
-    queryBounds !== null &&
-    boundsIntersect(candidateBounds, queryBounds)
-  );
-}
-
-function rectangleLikeIntersects(
-  node: Extract<SceneNode, { type: 'frame' | 'rectangle' }>,
-  pageMatrix: Matrix,
-  query: Polygon,
-  path: string,
-): Result<boolean> {
-  const expansion = localStrokeExpansion(node.stroke?.width ?? null);
-  const candidate = transformedRectangle(
-    pageMatrix,
-    -expansion,
-    -expansion,
-    node.width + expansion * 2,
-    node.height + expansion * 2,
-    path,
-  );
-  if (!candidate.ok) return candidate;
-  if (!broadPhaseIntersects(candidate.value, query)) return success(false);
-  return polygonsIntersect(candidate.value, query, path);
-}
-
-function textIntersects(
-  node: Extract<SceneNode, { type: 'text' }>,
-  pageMatrix: Matrix,
-  query: Polygon,
-  path: string,
-): Result<boolean> {
-  const candidate = transformedRectangle(pageMatrix, 0, 0, node.width, node.height, path);
-  if (!candidate.ok) return candidate;
-  if (!broadPhaseIntersects(candidate.value, query)) return success(false);
-  return polygonsIntersect(candidate.value, query, path);
-}
-
-function ellipseIntersects(
-  node: Extract<SceneNode, { type: 'ellipse' }>,
-  pageMatrix: Matrix,
-  query: Polygon,
-  path: string,
-): Result<boolean> {
-  const expansion = localStrokeExpansion(node.stroke?.width ?? null);
-  const candidateBounds = transformedRectangle(
-    pageMatrix,
-    -expansion,
-    -expansion,
-    node.width + expansion * 2,
-    node.height + expansion * 2,
-    path,
-  );
-  if (!candidateBounds.ok) return candidateBounds;
-  if (!broadPhaseIntersects(candidateBounds.value, query)) return success(false);
-
-  const inverse = invertMatrix(pageMatrix, path);
-  if (!inverse.ok) {
-    if (inverse.error.code === 'matrix.singular') return success(false);
-    return failure('geometry.computation-overflow', path);
-  }
-  const localQuery = transformPolygon(inverse.value, query, path);
-  if (!localQuery.ok) return localQuery;
-  return ellipseIntersectsPolygon(localQuery.value, node.width, node.height, expansion, path);
-}
-
 function candidateIntersects(
   node: SceneNode,
   pageMatrix: Matrix,
   query: Polygon,
   nodeIndex: number,
 ): Result<boolean> {
-  const path = nodeTransformPath(nodeIndex);
-  switch (node.type) {
-    case 'frame':
-    case 'rectangle':
-      return rectangleLikeIntersects(node, pageMatrix, query, path);
-    case 'ellipse':
-      return ellipseIntersects(node, pageMatrix, query, path);
-    case 'text':
-      return textIntersects(node, pageMatrix, query, path);
-    case 'group':
-      return success(false);
-  }
+  const prepared = prepareSelectionCandidate(node, pageMatrix, nodeIndex);
+  if (!prepared.ok) return prepared;
+  if (prepared.value === null) return success(false);
+  return preparedCandidateIntersects(prepared.value, query);
 }
 
 function queryPagePolygon(document: BringsDocument, query: Polygon): Result<readonly NodeId[]> {
@@ -251,13 +148,9 @@ export function intersectPageRect(
   document: BringsDocument,
   rect: PageRect,
 ): Result<readonly NodeId[]> {
-  const normalized = normalizeRect(rect);
+  const normalized = normalizePageRect(rect);
   if (!normalized.ok) return normalized;
-  const value = normalized.value;
-  return queryPagePolygon(
-    document,
-    rectanglePolygon(value.minX, value.minY, value.maxX - value.minX, value.maxY - value.minY),
-  );
+  return queryPagePolygon(document, normalizedPageRectPolygon(normalized.value));
 }
 
 /** Return eligible node IDs in front-to-back order for one page-space point. */

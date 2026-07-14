@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- b1840b1: Reject affine matrices when determinant or inverse computation overflows instead of accepting corrupt transforms.
+
 ## 0.9.0
 
 ### Minor Changes

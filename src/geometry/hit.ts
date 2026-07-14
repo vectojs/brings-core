@@ -1,82 +1,165 @@
-import type { BringsDocument, Matrix, NodeId, SceneNode, SolidPaint } from '../document/types';
+import type { BringsDocument, Matrix, NodeId, Result, SceneNode } from '../document/types';
+import {
+  clipConvexPolygon,
+  rectanglePolygon,
+  transformPolygon,
+  type Polygon,
+} from './intersection';
+import {
+  normalizedPageRectPolygon,
+  normalizePageRect,
+  prepareSelectionCandidate,
+  preparedCandidateIntersects,
+} from './hitShared';
+import { MIN_MATRIX_DETERMINANT, multiplyMatrices } from './matrix';
 
 export type PagePoint = Readonly<{ x: number; y: number }>;
 
+export type PageRect = Readonly<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>;
+
+type NodeEntry = Readonly<{ node: SceneNode; index: number }>;
+
 const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
 
-function multiply(left: Matrix, right: Matrix): Matrix {
-  return [
-    left[0] * right[0] + left[2] * right[1],
-    left[1] * right[0] + left[3] * right[1],
-    left[0] * right[2] + left[2] * right[3],
-    left[1] * right[2] + left[3] * right[3],
-    left[0] * right[4] + left[2] * right[5] + left[4],
-    left[1] * right[4] + left[3] * right[5] + left[5],
-  ];
+function failure(code: string, path: string): Result<never> {
+  return { ok: false, error: { code, path } };
 }
 
-function localPoint(matrix: Matrix, point: PagePoint): PagePoint | null {
-  const determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2];
-  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) return null;
-  const x = point.x - matrix[4];
-  const y = point.y - matrix[5];
-  return {
-    x: (matrix[3] * x - matrix[2] * y) / determinant,
-    y: (-matrix[1] * x + matrix[0] * y) / determinant,
+function success<T>(value: T): Result<T> {
+  return { ok: true, value };
+}
+
+function nodeTransformPath(nodeIndex: number): string {
+  return `/nodes/${nodeIndex}/transform`;
+}
+
+function transformedRectangle(
+  matrix: Matrix,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  path: string,
+): Result<Polygon> {
+  return transformPolygon(matrix, rectanglePolygon(x, y, width, height), path);
+}
+
+function candidateIntersects(
+  node: SceneNode,
+  pageMatrix: Matrix,
+  query: Polygon,
+  nodeIndex: number,
+): Result<boolean> {
+  const prepared = prepareSelectionCandidate(node, pageMatrix, nodeIndex);
+  if (!prepared.ok) return prepared;
+  if (prepared.value === null) return success(false);
+  return preparedCandidateIntersects(prepared.value, query);
+}
+
+function queryPagePolygon(document: BringsDocument, query: Polygon): Result<readonly NodeId[]> {
+  const pageIndex = document.pages.findIndex((page) => page.id === document.activePageId);
+  if (pageIndex < 0) {
+    return failure('geometry.active-page-not-found', '/activePageId');
+  }
+
+  const nodes = new Map<string, NodeEntry>(
+    document.nodes.map((node, index) => [node.id, { node, index }] as const),
+  );
+  const hits: NodeId[] = [];
+
+  const visit = (
+    node: SceneNode,
+    nodeIndex: number,
+    parentMatrix: Matrix,
+    clippedQuery: Polygon,
+  ): Result<void> => {
+    if (!node.visible || node.locked || clippedQuery.length === 0) {
+      return success(undefined);
+    }
+
+    const path = nodeTransformPath(nodeIndex);
+    const pageMatrix = multiplyMatrices(parentMatrix, node.transform);
+    if (pageMatrix.some((value) => !Number.isFinite(value))) {
+      return failure('geometry.computation-overflow', path);
+    }
+    const determinant = pageMatrix[0] * pageMatrix[3] - pageMatrix[1] * pageMatrix[2];
+    if (!Number.isFinite(determinant)) {
+      return failure('geometry.computation-overflow', path);
+    }
+    if (Math.abs(determinant) < MIN_MATRIX_DETERMINANT) {
+      return success(undefined);
+    }
+
+    const candidate = candidateIntersects(node, pageMatrix, clippedQuery, nodeIndex);
+    if (!candidate.ok) return candidate;
+    if (candidate.value) hits.push(node.id);
+
+    if (node.type !== 'frame' && node.type !== 'group') {
+      return success(undefined);
+    }
+
+    let childQuery = clippedQuery;
+    if (node.type === 'frame' && node.clipChildren) {
+      const clip = transformedRectangle(pageMatrix, 0, 0, node.width, node.height, path);
+      if (!clip.ok) return clip;
+      const clipped = clipConvexPolygon(clippedQuery, clip.value, path);
+      if (!clipped.ok) return clipped;
+      childQuery = clipped.value;
+    }
+
+    for (let childIndex = 0; childIndex < node.childIds.length; childIndex += 1) {
+      const childId = node.childIds[childIndex]!;
+      const entry = nodes.get(childId);
+      if (entry === undefined) {
+        return failure('geometry.document-invariant', `/nodes/${nodeIndex}/childIds/${childIndex}`);
+      }
+      if (entry.node.parentId !== node.id) {
+        return failure('geometry.document-invariant', `/nodes/${entry.index}/parentId`);
+      }
+      const child = visit(entry.node, entry.index, pageMatrix, childQuery);
+      if (!child.ok) return child;
+    }
+    return success(undefined);
   };
+
+  const page = document.pages[pageIndex]!;
+  for (let rootIndex = 0; rootIndex < page.rootNodeIds.length; rootIndex += 1) {
+    const rootId = page.rootNodeIds[rootIndex]!;
+    const root = nodes.get(rootId);
+    if (root === undefined) {
+      return failure('geometry.document-invariant', `/pages/${pageIndex}/rootNodeIds/${rootIndex}`);
+    }
+    if (root.node.parentId !== null) {
+      return failure('geometry.document-invariant', `/nodes/${root.index}/parentId`);
+    }
+    const result = visit(root.node, root.index, IDENTITY, query);
+    if (!result.ok) return result;
+  }
+  return success(hits);
 }
 
-function containsRectangle(point: PagePoint | null, width: number, height: number): boolean {
-  return point !== null && point.x >= 0 && point.x <= width && point.y >= 0 && point.y <= height;
-}
-
-function paints(paint: SolidPaint | null, opacity: number): boolean {
-  return paint !== null && paint.a > 0 && opacity > 0;
+/** Return eligible node IDs in stable back-to-front order for one page-space rectangle. */
+export function intersectPageRect(
+  document: BringsDocument,
+  rect: PageRect,
+): Result<readonly NodeId[]> {
+  const normalized = normalizePageRect(rect);
+  if (!normalized.ok) return normalized;
+  return queryPagePolygon(document, normalizedPageRectPolygon(normalized.value));
 }
 
 /** Return eligible node IDs in front-to-back order for one page-space point. */
 export function hitTestPage(document: BringsDocument, point: PagePoint): readonly NodeId[] {
-  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return [];
-  const activePage = document.pages.find((page) => page.id === document.activePageId);
-  if (activePage === undefined) return [];
-  const nodes = new Map(document.nodes.map((node) => [node.id, node]));
-  const hits: NodeId[] = [];
-
-  const visit = (node: SceneNode, parentMatrix: Matrix): void => {
-    if (!node.visible || node.locked) return;
-    const pageMatrix = multiply(parentMatrix, node.transform);
-    const local = localPoint(pageMatrix, point);
-    if (node.type === 'frame' || node.type === 'group') {
-      const mayVisitChildren =
-        node.type !== 'frame' ||
-        !node.clipChildren ||
-        containsRectangle(local, node.width, node.height);
-      if (mayVisitChildren) {
-        for (let index = node.childIds.length - 1; index >= 0; index -= 1) {
-          const child = nodes.get(node.childIds[index]!);
-          if (child !== undefined) visit(child, pageMatrix);
-        }
-      }
-    }
-    if (
-      node.type === 'frame' &&
-      paints(node.background, node.opacity) &&
-      containsRectangle(local, node.width, node.height)
-    ) {
-      hits.push(node.id);
-    }
-    if (
-      node.type === 'rectangle' &&
-      paints(node.fill, node.opacity) &&
-      containsRectangle(local, node.width, node.height)
-    ) {
-      hits.push(node.id);
-    }
-  };
-
-  for (let index = activePage.rootNodeIds.length - 1; index >= 0; index -= 1) {
-    const root = nodes.get(activePage.rootNodeIds[index]!);
-    if (root !== undefined) visit(root, IDENTITY);
-  }
-  return hits;
+  const result = intersectPageRect(document, {
+    x: point.x,
+    y: point.y,
+    width: 0,
+    height: 0,
+  });
+  return result.ok ? [...result.value].reverse() : [];
 }

@@ -48,6 +48,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Added `PageRect`, `intersectPageRect`, `PageHitIndex`, and
+  `createPageHitIndex` for exact renderer-free rectangle queries in stable
+  back-to-front document order. The reusable immutable index preserves the
+  one-shot result and error contract while accelerating repeated point and
+  marquee queries against one document snapshot.
+- Added exact affine polygon and ellipse selection silhouettes, inclusive edge
+  contact, centered local strokes, and nested unexpanded Frame clipping.
+- Added stable `geometry.*` errors and JSON Pointer paths for invalid rectangles,
+  computed overflow, missing active pages, and document topology violations;
+  clipped-away subtree errors remain unreachable until their clip chain is
+  active for a query.
+- Added the pure `resolveStructuralSelection` boundary for duplicate removal,
+  active-page eligibility, selected-ancestor normalization, and active-node
+  fallback before an editor commits selection through the store.
+- Expanded `hitTestPage` compatibly to use the shared exact silhouettes and to
+  return eligible transparent Frame, Rectangle, Ellipse, and Text nodes. Its
+  front-to-back ordering and non-throwing empty-array failure contract are
+  unchanged.
 - Added atomic page-space transform-delta commands with parent-local matrix
   derivation and selection-preserving undo/redo history.
 - Added strict schema-v1 document validation, canonical graph ordering, and

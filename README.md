@@ -15,17 +15,135 @@ The current Core provides strict schema-v1 document validation and a
 transactional in-memory store. It supports Frame, Group, Rectangle, Ellipse,
 and Text document values; page creation, renaming, reordering, deletion, and
 activation; intention-level Frame and Rectangle creation; detached-subtree
-insertion and atomic multi-subtree deletion; normalized ephemeral selection; renderer-free
-page-space hit testing; page-space affine transform deltas; and atomic
-undo/redo with monotonic revisions.
+insertion and atomic multi-subtree deletion; normalized ephemeral selection;
+renderer-free point and rectangle intersection; reusable immutable page-hit
+indexes; page-space affine transform deltas; and atomic undo/redo with monotonic
+revisions.
 
 The Core accepts caller-provided lowercase RFC-4122 UUIDs and has no random-ID
-policy. Every public operation returns `Result<T>` with a stable machine error
-code and JSON Pointer path. Returned values are detached snapshots.
+policy. Fallible document, selection, index-construction, and rectangle-query
+boundaries return `Result<T>` with a stable machine error code and JSON Pointer
+path. `hitTestPage` and `PageHitIndex.hitTest` instead preserve a non-throwing
+point-query contract and return an empty array on invalid input or geometry
+failure. Validated document values and store snapshots are detached from
+caller-owned input and expose readonly public types.
 
 ```ts
-import { createDocumentStore } from '@vectojs/brings-core';
+import {
+  createDocumentStore,
+  createPageHitIndex,
+  intersectPageRect,
+  resolveStructuralSelection,
+  type Result,
+} from '@vectojs/brings-core';
 
+function unwrap<T>(result: Result<T>): T {
+  if (!result.ok) throw new Error(`${result.error.code} at ${result.error.path}`);
+  return result.value;
+}
+
+const pageId = '22222222-2222-4222-8222-222222222222';
+const rectangleId = '33333333-3333-4333-8333-333333333333';
+const store = unwrap(
+  createDocumentStore({
+    id: '11111111-1111-4111-8111-111111111111',
+    name: 'Untitled',
+    initialPage: { id: pageId, name: 'Page 1' },
+  }),
+);
+
+unwrap(
+  store.execute({
+    kind: 'create-rectangle',
+    pageId,
+    parentId: null,
+    index: 0,
+    rectangle: {
+      id: rectangleId,
+      name: 'Rectangle',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 40, 30],
+      width: 160,
+      height: 100,
+      cornerRadii: [0, 0, 0, 0],
+      fill: { type: 'solid', r: 0.15, g: 0.45, b: 1, a: 1 },
+      stroke: null,
+    },
+  }),
+);
+
+const snapshot = store.snapshot();
+const marquee = { x: 20, y: 20, width: 220, height: 140 } as const;
+
+// Use the one-shot helper for an occasional query.
+const oneShotIds = unwrap(intersectPageRect(snapshot.document, marquee));
+
+// Reuse one immutable index for repeated queries against the same snapshot.
+const index = unwrap(createPageHitIndex(snapshot.document));
+const indexedIds = unwrap(index.intersect(marquee));
+
+if (oneShotIds.join() !== indexedIds.join()) {
+  throw new Error('One-shot and indexed queries must preserve the same order.');
+}
+
+const selection = unwrap(
+  resolveStructuralSelection(snapshot.document, {
+    nodeIds: indexedIds,
+    activeNodeId: indexedIds.at(-1) ?? null,
+  }),
+);
+const selectedSnapshot = unwrap(store.setSelection(selection));
+
+console.log(selectedSnapshot.selection.nodeIds); // [rectangleId]
+```
+
+`intersectPageRect` returns eligible node IDs in stable back-to-front order;
+`hitTestPage` and `PageHitIndex.hitTest` return front-to-back point hits. Both
+paths use exact affine polygon/ellipse silhouettes, centered strokes, and
+unexpanded ancestor Frame clipping. Frame, Rectangle, Ellipse, and Text remain
+selectable even when their background or fill is transparent; Group contributes
+hierarchy and transforms but has no selection silhouette.
+
+Create a `PageHitIndex` once for a detached immutable document snapshot when an
+interaction will issue repeated point or marquee queries. Rebuild the index after
+a durable document revision changes. The one-shot helpers intentionally do not
+cache by document identity, so they remain safe even when external JavaScript
+mutates a value that TypeScript declared readonly.
+
+Every fallible rectangle query reports stable geometry error codes and JSON
+Pointer paths. `PageHitIndex.hitTest` and the compatible one-shot `hitTestPage`
+preserve their non-throwing point-query contract by returning an empty array when
+the point is invalid or exact geometry evaluation fails.
+
+The store remains responsible for committing normalized ephemeral selection and
+durable commands. For example, one gesture can apply a page-space delta to the
+selection committed above:
+
+```ts
+unwrap(
+  store.execute({
+    kind: 'apply-transform-delta',
+    nodeIds: store.snapshot().selection.nodeIds,
+    delta: [1, 0, 0, 1, 24, -8],
+  }),
+);
+```
+
+Core owns document and hierarchy math; a Website gesture previews transiently
+and commits only its final selection or delta. The Core remains independent from
+DOM, PointerEvent, Canvas, and VectoJS runtime types.
+
+The package does not yet include property commands, grouping/reparenting, codec
+parsing or serialization, persistence, or browser adapters. Those remain
+independently verified slices.
+
+## Minimal document creation
+
+For callers that only need an empty document store:
+
+```ts
 const storeResult = createDocumentStore({
   id: '11111111-1111-4111-8111-111111111111',
   name: 'Untitled',
@@ -39,31 +157,8 @@ if (storeResult.ok) {
   const store = storeResult.value;
   const snapshot = store.snapshot();
   console.log(snapshot.document.revision); // 0
-
-  // After creating/selecting nodes, one gesture commits one page-space delta.
-  const selectedNodeIds = store.snapshot().selection.nodeIds;
-  if (selectedNodeIds.length > 0) {
-    store.execute({
-      kind: 'apply-transform-delta',
-      nodeIds: selectedNodeIds,
-      delta: [1, 0, 0, 1, 24, -8],
-    });
-  }
-
-  const selection = store.snapshot().selection.nodeIds;
-  if (selection.length > 0) {
-    store.execute({ kind: 'delete-nodes', nodeIds: selection });
-  }
 }
 ```
-
-Core owns document and hierarchy math; a Website gesture previews transiently
-and commits only its final delta. The Core remains independent from DOM,
-PointerEvent, Canvas, and VectoJS runtime types.
-
-The package does not yet include marquee/bounds queries, property commands,
-grouping/reparenting, codec parsing or serialization, persistence, or browser
-adapters. Those remain independently verified slices.
 
 ## Development
 

@@ -1,7 +1,9 @@
 export { BRINGS_SCHEMA_VERSION, isOpaqueId, type OpaqueId } from './schema';
 export { createDocument, validateDocument } from './document/validate';
+export { resolveStructuralSelection } from './document/selection';
 export { createDocumentStore } from './document/store';
-export { hitTestPage, type PagePoint } from './geometry/hit';
+export { hitTestPage, intersectPageRect, type PagePoint, type PageRect } from './geometry/hit';
+export { createPageHitIndex, type PageHitIndex } from './geometry/pageHitIndex';
 export type {
   BringsDocument,
   BringsDocumentInput,

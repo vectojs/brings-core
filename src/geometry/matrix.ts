@@ -27,17 +27,21 @@ export function multiplyMatrices(left: Matrix, right: Matrix): Matrix {
 export function invertMatrix(matrix: Matrix, path: string): Result<Matrix> {
   if (matrix.some((value) => !Number.isFinite(value))) return failure('matrix.invalid', path);
   const determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2];
+  if (!Number.isFinite(determinant)) return failure('matrix.computation-overflow', path);
   if (Math.abs(determinant) < MIN_MATRIX_DETERMINANT) {
     return failure('matrix.singular', path);
   }
-  return success([
+  const inverse: Matrix = [
     matrix[3] / determinant,
     -matrix[1] / determinant,
     -matrix[2] / determinant,
     matrix[0] / determinant,
     (matrix[2] * matrix[5] - matrix[3] * matrix[4]) / determinant,
     (matrix[1] * matrix[4] - matrix[0] * matrix[5]) / determinant,
-  ]);
+  ];
+  return inverse.every(Number.isFinite)
+    ? success(inverse)
+    : failure('matrix.computation-overflow', path);
 }
 
 /** Derive one node's immutable page-space matrix from validated document state. */

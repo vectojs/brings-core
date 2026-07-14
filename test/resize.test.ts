@@ -443,6 +443,28 @@ test('rejects singular and overflowing proposals at stable paths', () => {
   });
 });
 
+test('rejects a finite resize delta whose determinant overflows', () => {
+  const prepared = unwrap(
+    prepareSelectionResize(baseDocument({ transform: [1e-6, 0, 0, 1e-6, 0, 0] }), {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+
+  expect(
+    prepared.propose({
+      handle: 'south-east',
+      startPoint: { x: 1e-4, y: 5e-5 },
+      currentPoint: { x: 1e304, y: 5e303 },
+      preserveAspectRatio: false,
+      fromCenter: false,
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'matrix.computation-overflow', path: '/delta' },
+  });
+});
+
 test('reports model-bound overflow before constructing a prepared plan', () => {
   expect(
     prepareSelectionResize(

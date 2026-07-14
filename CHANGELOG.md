@@ -62,6 +62,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Reject finite affine matrices whose determinant or inverse computation
+  overflows, using the stable `matrix.computation-overflow` error boundary.
 - Added `prepareSelectionResize` for detached unstroked model bounds, recursive
   Group geometry, eight handle centers, opposite/center anchors, constrained and
   signed affine scale proposals, projected preview bounds, and exact frozen

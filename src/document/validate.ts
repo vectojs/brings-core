@@ -193,7 +193,9 @@ export function validateMatrixInput(value: unknown, path: string): Result<Matrix
     if (!number.ok) return failure('matrix.invalid', pathAt(path, index));
     values.push(number.value);
   }
-  if (Math.abs(values[0]! * values[3]! - values[1]! * values[2]!) < MIN_MATRIX_DETERMINANT) {
+  const determinant = values[0]! * values[3]! - values[1]! * values[2]!;
+  if (!Number.isFinite(determinant)) return failure('matrix.computation-overflow', path);
+  if (Math.abs(determinant) < MIN_MATRIX_DETERMINANT) {
     return failure('matrix.singular', path);
   }
   return success([values[0]!, values[1]!, values[2]!, values[3]!, values[4]!, values[5]!]);

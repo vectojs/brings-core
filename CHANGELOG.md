@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- 0d79a10: Add immutable prepared selection resize plans with recursive model bounds, eight handles, modifier-aware signed scaling, projected previews, and exact affine transform commands.
+
 ## 0.8.0
 
 ### Minor Changes

@@ -56,6 +56,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Added `prepareSelectionResize` for detached unstroked model bounds, recursive
+  Group geometry, eight handle centers, opposite/center anchors, constrained and
+  signed affine scale proposals, projected preview bounds, and exact frozen
+  `apply-transform-delta` commands.
+- Added stable selection, singular-matrix, invalid-point, and computed-overflow
+  failures for renderer-free resize preparation and proposal generation.
 - Added `PageRect`, `intersectPageRect`, `PageHitIndex`, and
   `createPageHitIndex` for exact renderer-free rectangle queries in stable
   back-to-front document order. The reusable immutable index preserves the

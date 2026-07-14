@@ -18,7 +18,9 @@ activation; intention-level Frame and Rectangle creation; detached-subtree
 insertion and atomic multi-subtree deletion; normalized ephemeral selection;
 renderer-free point and rectangle intersection; reusable immutable page-hit
 indexes; page-space affine transform deltas; and atomic undo/redo with monotonic
-revisions.
+revisions. It also prepares detached selection resize plans with recursive model
+bounds, eight handles, modifier-aware affine proposals, and exact transform
+commands without importing a renderer or pointer-event type.
 
 The Core accepts caller-provided lowercase RFC-4122 UUIDs and has no random-ID
 policy. Fallible document, selection, index-construction, and rectangle-query
@@ -135,9 +137,44 @@ Core owns document and hierarchy math; a Website gesture previews transiently
 and commits only its final selection or delta. The Core remains independent from
 DOM, PointerEvent, Canvas, and VectoJS runtime types.
 
-The package does not yet include property commands, grouping/reparenting, codec
-parsing or serialization, persistence, or browser adapters. Those remain
-independently verified slices.
+## Prepared resize plans
+
+Prepare resize geometry once when a gesture begins, then ask the immutable plan
+for pure proposals as the pointer moves. Core normalizes the selection, resolves
+recursive Group bounds without stroke expansion, and keeps the pointer offset,
+anchor, modifier, signed-scale, and command math in one renderer-free contract.
+
+```ts
+import { prepareSelectionResize } from '@vectojs/brings-core';
+
+const resize = unwrap(
+  prepareSelectionResize(store.snapshot().document, store.snapshot().selection),
+);
+const east = resize.handles.find((entry) => entry.handle === 'east')!;
+const proposal = unwrap(
+  resize.propose({
+    handle: east.handle,
+    startPoint: east.point,
+    currentPoint: { x: east.point.x + 32, y: east.point.y },
+    preserveAspectRatio: false,
+    fromCenter: false,
+  }),
+);
+
+// Preview `proposal.bounds` without mutating the document. Pointerup commits
+// the exact frozen command so preview and history cannot disagree.
+unwrap(store.execute(proposal.command));
+```
+
+All eight axis-aligned handles use the opposite handle as their default anchor.
+Set `fromCenter` for center-anchored scaling and `preserveAspectRatio` for uniform
+scaling; callers normally map Alt and Shift to those semantic modifiers. Crossing
+the anchor produces a signed scale. Singular and computed-overflow proposals are
+rejected without changing the prepared plan or caller-owned input.
+
+The package does not yet include property commands, grouping/reparenting, resize
+snapping, rotation editing, codec parsing or serialization, persistence, or
+browser adapters. Those remain independently verified slices.
 
 ## Minimal document creation
 

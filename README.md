@@ -27,8 +27,10 @@ policy. Fallible document, selection, index-construction, and rectangle-query
 boundaries return `Result<T>` with a stable machine error code and JSON Pointer
 path. `hitTestPage` and `PageHitIndex.hitTest` instead preserve a non-throwing
 point-query contract and return an empty array on invalid input or geometry
-failure. Validated document values and store snapshots are detached from
-caller-owned input and expose readonly public types.
+failure. Affine validation and inversion report `matrix.computation-overflow`
+at the caller-provided path when a finite matrix produces a non-finite
+determinant or inverse. Validated document values and store snapshots are
+detached from caller-owned input and expose readonly public types.
 
 ```ts
 import {

@@ -162,6 +162,22 @@ test('rejects invalid scalar, matrix, and paint values at stable pointers', () =
   });
 });
 
+test('rejects a finite matrix whose determinant overflows', () => {
+  expect(
+    validateDocument(
+      documentWithNodes([
+        frameNode({
+          transform: [Number.MAX_VALUE, 0, 0, Number.MAX_VALUE, 0, 0],
+        }),
+        rectangleNode(),
+      ]),
+    ),
+  ).toEqual({
+    ok: false,
+    error: { code: 'matrix.computation-overflow', path: '/nodes/0/transform' },
+  });
+});
+
 test('rejects page sequence and active-page violations', () => {
   expect(
     validateDocument({

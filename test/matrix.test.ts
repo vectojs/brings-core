@@ -73,6 +73,17 @@ test('inverts a finite affine matrix and rejects a singular matrix', () => {
   });
 });
 
+test('rejects determinant and inverse-result overflow at the supplied path', () => {
+  expect(invertMatrix([Number.MAX_VALUE, 0, 0, Number.MAX_VALUE, 0, 0], '/delta')).toEqual({
+    ok: false,
+    error: { code: 'matrix.computation-overflow', path: '/delta' },
+  });
+  expect(invertMatrix([1, 0, 1, -1, Number.MAX_VALUE, Number.MAX_VALUE], '/delta')).toEqual({
+    ok: false,
+    error: { code: 'matrix.computation-overflow', path: '/delta' },
+  });
+});
+
 test('derives a nested node page matrix without retaining caller state', () => {
   const document = documentFixture();
   const result = pageMatrixForNode(document, ids.rectangle, '/nodeId');

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- a1f9778: Add exact clipped page-rectangle intersection queries, reusable immutable page-hit
+  indexes, transparent selection silhouettes, and a pure structural-selection
+  normalizer for marquee and additive editor gestures.
+
 ## 0.7.0
 
 ### Minor Changes

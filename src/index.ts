@@ -4,6 +4,17 @@ export { resolveStructuralSelection } from './document/selection';
 export { createDocumentStore } from './document/store';
 export { hitTestPage, intersectPageRect, type PagePoint, type PageRect } from './geometry/hit';
 export { createPageHitIndex, type PageHitIndex } from './geometry/pageHitIndex';
+export {
+  prepareSelectionResize,
+  type PreparedSelectionResize,
+  type ResizeBounds,
+  type ResizeHandle,
+  type ResizeHandlePosition,
+  type ResizePoint,
+  type SelectionResizeCommand,
+  type SelectionResizeProposal,
+  type SelectionResizeProposalInput,
+} from './geometry/resize';
 export type {
   BringsDocument,
   BringsDocumentInput,

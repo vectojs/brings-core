@@ -37,9 +37,12 @@ export type {
   DocumentContent,
   EllipseNode,
   FrameNode,
+  GroupNodesCommand,
   GroupNode,
   Matrix,
+  MoveNodesCommand,
   NodeId,
+  NodePropertyPatchInput,
   Page,
   PageId,
   Radii,
@@ -48,6 +51,7 @@ export type {
   SceneNode,
   SceneNodeInput,
   SelectionInput,
+  SetNodePropertiesCommand,
   SolidPaint,
   SolidPaintInput,
   Stroke,
@@ -55,6 +59,7 @@ export type {
   StructuralSelection,
   TextNode,
   TransformDeltaInput,
+  UngroupNodeCommand,
   UUID,
 } from './document/types';
 export type { BringsDocumentStore, EditorSnapshot } from './document/store';

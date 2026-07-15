@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createDocument, validateDocument } from '../src';
+import { createDocument, validateDocument, type DocumentCommandInput } from '../src';
 
 const ids = {
   document: '11111111-1111-4111-8111-111111111111',
@@ -7,6 +7,7 @@ const ids = {
   frame: '33333333-3333-4333-8333-333333333333',
   rectangle: '44444444-4444-4444-8444-444444444444',
   otherPage: '55555555-5555-4555-8555-555555555555',
+  group: '66666666-6666-4666-8666-666666666666',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -296,4 +297,34 @@ test('uses strict lowercase UUIDs and returns a detached valid snapshot', () => 
   expect(document.nodes[0]?.name).toBe('Frame');
   (document.nodes[0] as { name: string }).name = 'Mutated returned value';
   expect((input.nodes[0] as { name: string }).name).toBe('Mutated caller value');
+});
+
+test('publishes JSON-compatible layer and property command inputs', () => {
+  const commands: readonly DocumentCommandInput[] = [
+    {
+      kind: 'set-node-properties',
+      nodeIds: [ids.rectangle],
+      patch: { opacity: 0.5 },
+    },
+    {
+      kind: 'move-nodes',
+      nodeIds: [ids.rectangle],
+      pageId: ids.page,
+      parentId: null,
+      index: 0,
+    },
+    {
+      kind: 'group-nodes',
+      nodeIds: [ids.rectangle],
+      group: { id: ids.group, name: 'Group' },
+    },
+    { kind: 'ungroup-node', nodeId: ids.group },
+  ];
+
+  expect(commands.map((command) => command.kind)).toEqual([
+    'set-node-properties',
+    'move-nodes',
+    'group-nodes',
+    'ungroup-node',
+  ]);
 });

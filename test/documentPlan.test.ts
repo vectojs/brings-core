@@ -204,6 +204,38 @@ test('inserts a detached Frame with a nested Rectangle without retaining caller 
   expect(result.value.nodes[0]?.name).toBe('Frame');
 });
 
+test('preserves existing creation transform and deletion planner contracts', () => {
+  const before = initialDocument();
+  const inserted = unwrap(planCommand(before, frameCommand()));
+  const afterInsert = documentFromContent(before, inserted, 1);
+  const transformed = unwrap(
+    planCommand(afterInsert, {
+      kind: 'apply-transform-delta',
+      nodeIds: [ids.rectangle],
+      delta: [1, 0, 0, 1, 8, -3],
+    }),
+  );
+  const afterTransform = documentFromContent(afterInsert, transformed, 2);
+  const deleted = unwrap(
+    planCommand(afterTransform, { kind: 'delete-node', nodeId: ids.rectangle }),
+  );
+
+  expect(inserted).toMatchObject({
+    pages: [{ rootNodeIds: [ids.frame] }],
+    nodes: [
+      { id: ids.frame, childIds: [ids.rectangle] },
+      { id: ids.rectangle, transform: [1, 0, 0, 1, 20, 20] },
+    ],
+  });
+  expect(transformed).toMatchObject({
+    nodes: [{ id: ids.frame }, { id: ids.rectangle, transform: [1, 0, 0, 1, 28, 17] }],
+  });
+  expect(deleted).toMatchObject({
+    pages: [{ rootNodeIds: [ids.frame] }],
+    nodes: [{ id: ids.frame, childIds: [] }],
+  });
+});
+
 test('enforces page index and no-change contracts', () => {
   const before = initialDocument();
   expect(planCommand(before, null as unknown as never)).toEqual({

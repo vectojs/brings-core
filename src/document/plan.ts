@@ -1,177 +1,34 @@
-import { cloneContent, cloneNode } from './clone';
+import { cloneNode } from './clone';
 import { invertMatrix, multiplyMatrices, pageMatrixForNode } from '../geometry/matrix';
+import { validateDetachedSubtree, validateMatrixInput } from './validate';
 import {
-  isLowercaseRfc4122Uuid,
-  validateDetachedSubtree,
-  validateDocument,
-  validateMatrixInput,
-} from './validate';
+  ancestorIds,
+  commandId,
+  commandIndex,
+  commitCandidate,
+  failure,
+  firstLocked,
+  isContainer,
+  nodeMap,
+  pageForNode,
+  pageIndex,
+  replaceContainerChildren,
+  subtreeIds,
+  success,
+  withChildIds,
+  withPagesAndNodes,
+  withParent,
+} from './commandShared';
 import type {
   BringsDocument,
   DocumentCommandInput,
   DocumentContent,
-  FrameNode,
-  GroupNode,
   Matrix,
   NodeId,
-  Page,
   PageId,
   Result,
   SceneNode,
-  UUID,
 } from './types';
-
-type NodeEntry = Readonly<{ index: number; node: SceneNode }>;
-
-function failure(code: string, path: string): Result<never> {
-  return { ok: false, error: { code, path } };
-}
-
-function success<T>(value: T): Result<T> {
-  return { ok: true, value };
-}
-
-function commandId(value: string, path: string): Result<UUID> {
-  if (!isLowercaseRfc4122Uuid(value)) return failure('id.invalid', path);
-  return success(value);
-}
-
-function commandIndex(value: number, maximum: number): Result<number> {
-  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) {
-    return failure('command.index', '/index');
-  }
-  return success(value);
-}
-
-function nodeMap(content: DocumentContent): Map<string, NodeEntry> {
-  return new Map(content.nodes.map((node, index) => [node.id, { index, node }]));
-}
-
-function childIdsOf(node: SceneNode): readonly NodeId[] {
-  return node.type === 'frame' || node.type === 'group' ? node.childIds : [];
-}
-
-function isContainer(node: SceneNode): node is FrameNode | GroupNode {
-  return node.type === 'frame' || node.type === 'group';
-}
-
-function withParent(node: SceneNode, parentId: NodeId | null): SceneNode {
-  return { ...cloneNode(node), parentId } as SceneNode;
-}
-
-function withChildIds(node: FrameNode | GroupNode, childIds: readonly NodeId[]): SceneNode {
-  if (node.type === 'frame') {
-    const frame = cloneNode(node) as FrameNode;
-    return { ...frame, childIds: [...childIds] };
-  }
-  const group = cloneNode(node) as GroupNode;
-  return { ...group, childIds: [...childIds] as [NodeId, ...NodeId[]] };
-}
-
-function withPagesAndNodes(
-  content: DocumentContent,
-  pages: readonly Page[],
-  nodes: readonly SceneNode[],
-  activePageId = content.activePageId,
-): DocumentContent {
-  return {
-    name: content.name,
-    pageOrder: pages.map((page) => page.id),
-    activePageId,
-    pages: pages.map((page) => ({
-      id: page.id,
-      name: page.name,
-      rootNodeIds: [...page.rootNodeIds],
-    })),
-    nodes: nodes.map(cloneNode),
-  };
-}
-
-function canonicalize(content: DocumentContent): DocumentContent {
-  const byId = new Map(content.nodes.map((node) => [node.id, node]));
-  const ordered: SceneNode[] = [];
-  const visit = (nodeId: NodeId): void => {
-    const node = byId.get(nodeId);
-    if (node === undefined) return;
-    ordered.push(cloneNode(node));
-    for (const childId of childIdsOf(node)) visit(childId);
-  };
-  for (const page of content.pages) {
-    for (const rootId of page.rootNodeIds) visit(rootId);
-  }
-  return withPagesAndNodes(content, content.pages, ordered);
-}
-
-function commitCandidate(
-  before: BringsDocument,
-  content: DocumentContent,
-): Result<DocumentContent> {
-  const validated = validateDocument({
-    id: before.id,
-    revision: before.revision,
-    ...canonicalize(content),
-  });
-  if (!validated.ok) return validated;
-  return success(cloneContent(validated.value));
-}
-
-function pageIndex(content: DocumentContent, pageId: string): number {
-  return content.pages.findIndex((page) => page.id === pageId);
-}
-
-function pageForNode(content: DocumentContent, nodeId: NodeId): PageId | null {
-  const byId = nodeMap(content);
-  let current = byId.get(nodeId)?.node;
-  while (current !== undefined && current.parentId !== null)
-    current = byId.get(current.parentId)?.node;
-  if (current === undefined) return null;
-  return content.pages.find((page) => page.rootNodeIds.includes(current!.id))?.id ?? null;
-}
-
-function ancestorIds(content: DocumentContent, nodeId: NodeId): Set<string> {
-  const byId = nodeMap(content);
-  const ids = new Set<string>();
-  let current = byId.get(nodeId)?.node;
-  while (current !== undefined) {
-    ids.add(current.id);
-    current = current.parentId === null ? undefined : byId.get(current.parentId)?.node;
-  }
-  return ids;
-}
-
-function subtreeIds(content: DocumentContent, nodeId: NodeId): Set<string> {
-  const byId = nodeMap(content);
-  const ids = new Set<string>();
-  const visit = (currentId: NodeId): void => {
-    if (ids.has(currentId)) return;
-    ids.add(currentId);
-    const node = byId.get(currentId)?.node;
-    if (node === undefined) return;
-    for (const childId of childIdsOf(node)) visit(childId);
-  };
-  visit(nodeId);
-  return ids;
-}
-
-function firstLocked(content: DocumentContent, protectedIds: ReadonlySet<string>): Result<void> {
-  for (let index = 0; index < content.nodes.length; index += 1) {
-    const node = content.nodes[index]!;
-    if (protectedIds.has(node.id) && node.locked) {
-      return failure('node.locked', `/nodes/${index}/locked`);
-    }
-  }
-  return success(undefined);
-}
-
-function replaceContainerChildren(
-  nodes: readonly SceneNode[],
-  containerId: NodeId,
-  childIds: readonly NodeId[],
-): SceneNode[] {
-  return nodes.map((node) =>
-    node.id === containerId && isContainer(node) ? withChildIds(node, childIds) : cloneNode(node),
-  );
-}
 
 function insertPage(
   before: BringsDocument,

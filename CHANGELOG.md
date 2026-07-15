@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Minor Changes
+
+- Add `openDocumentStore` for validated, detached existing documents with
+  revision-continuing commands and fresh ephemeral history state.
+
 ## 0.12.0
 
 ### Minor Changes

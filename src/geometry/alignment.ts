@@ -449,7 +449,7 @@ function resizeCandidateForAxis(
   return best;
 }
 
-function guidesForResizeBounds(
+function guidesForBounds(
   guides: readonly AlignmentGuide[],
   source: ResizeBounds,
   targets: readonly Target[],
@@ -652,7 +652,12 @@ export function prepareSelectionAlignment(
         const guides = [x?.guide, y?.guide].filter(
           (guide): guide is AlignmentGuide => guide !== undefined,
         );
-        return success(freezeMoveResult(snapped, guides));
+        return success(
+          freezeMoveResult(
+            snapped,
+            guidesForBounds(guides, translateBounds(bounds, snapped), targets.value),
+          ),
+        );
       },
       resolveResize: (resizeInput: SelectionResizeProposalInput): Result<AlignmentResizeResult> => {
         const raw = preparedResize.value.propose(resizeInput);
@@ -701,7 +706,7 @@ export function prepareSelectionAlignment(
         ) {
           return unsnapped();
         }
-        const guides = guidesForResizeBounds(
+        const guides = guidesForBounds(
           selected.map((candidate) => candidate.guide),
           snapped.value.bounds,
           targets.value,

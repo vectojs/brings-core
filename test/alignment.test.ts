@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   prepareSelectionAlignment,
+  prepareSelectionResize,
   type BringsDocument,
   type SceneNodeInput,
   type SelectionInput,
@@ -118,6 +119,207 @@ test('uses an inclusive six-unit threshold and rejects farther candidates', () =
     delta: { x: 7.999, y: 0 },
     guides: [],
   });
+});
+
+test('resolves each edge resize through an adjusted pointer that regenerates its proposal', () => {
+  const cases = [
+    {
+      handle: 'east' as const,
+      startPoint: { x: 110, y: 45 },
+      currentPoint: { x: 119, y: 45 },
+      adjustedPoint: { x: 120, y: 45 },
+      target: rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 120, 200] }),
+    },
+    {
+      handle: 'west' as const,
+      startPoint: { x: 10, y: 45 },
+      currentPoint: { x: 1, y: 45 },
+      adjustedPoint: { x: 0, y: 45 },
+      target: rectangle({ id: IDS.target, transform: [1, 0, 0, 1, -100, 200] }),
+    },
+    {
+      handle: 'north' as const,
+      startPoint: { x: 60, y: 20 },
+      currentPoint: { x: 60, y: 11 },
+      adjustedPoint: { x: 60, y: 10 },
+      target: rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 300, -90], height: 100 }),
+    },
+    {
+      handle: 'south' as const,
+      startPoint: { x: 60, y: 70 },
+      currentPoint: { x: 60, y: 79 },
+      adjustedPoint: { x: 60, y: 80 },
+      target: rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 300, 80] }),
+    },
+  ];
+
+  for (const testCase of cases) {
+    const document = documentWithTargets([testCase.target]);
+    const input = {
+      handle: testCase.handle,
+      startPoint: testCase.startPoint,
+      currentPoint: testCase.currentPoint,
+      preserveAspectRatio: false,
+      fromCenter: false,
+    };
+    const aligned = unwrap(
+      prepareSelectionAlignment(document, {
+        nodeIds: [FIXTURE_IDS.rectangle],
+        activeNodeId: FIXTURE_IDS.rectangle,
+      }),
+    );
+    const resized = unwrap(
+      prepareSelectionResize(document, {
+        nodeIds: [FIXTURE_IDS.rectangle],
+        activeNodeId: FIXTURE_IDS.rectangle,
+      }),
+    );
+
+    const result = unwrap(aligned.resolveResize(input));
+    expect(result.currentPoint).toEqual(testCase.adjustedPoint);
+    expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
+      ok: true,
+      value: result.resize,
+    });
+    expect(result.guides).toHaveLength(1);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.currentPoint)).toBe(true);
+    expect(Object.isFrozen(result.resize)).toBe(true);
+    expect(Object.isFrozen(result.guides)).toBe(true);
+  }
+});
+
+test('resolves a corner resize on both axes using the exact returned pointer', () => {
+  const document = documentWithTargets([
+    rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 120, 80] }),
+  ]);
+  const input = {
+    handle: 'south-east' as const,
+    startPoint: { x: 110, y: 70 },
+    currentPoint: { x: 119, y: 79 },
+    preserveAspectRatio: false,
+    fromCenter: false,
+  };
+  const aligned = unwrap(
+    prepareSelectionAlignment(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const resized = unwrap(
+    prepareSelectionResize(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+
+  const result = unwrap(aligned.resolveResize(input));
+  expect(result.currentPoint).toEqual({ x: 120, y: 80 });
+  expect(result.guides.map((guide) => guide.axis)).toEqual(['x', 'y']);
+  expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
+    ok: true,
+    value: result.resize,
+  });
+});
+
+test('snaps only the controlling pointer axis for a Shift corner resize', () => {
+  const document = documentWithTargets([
+    rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 121, 72.5] }),
+  ]);
+  const input = {
+    handle: 'south-east' as const,
+    startPoint: { x: 110, y: 70 },
+    currentPoint: { x: 120, y: 71 },
+    preserveAspectRatio: true,
+    fromCenter: false,
+  };
+  const aligned = unwrap(
+    prepareSelectionAlignment(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const resized = unwrap(
+    prepareSelectionResize(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+
+  const result = unwrap(aligned.resolveResize(input));
+  expect(result.currentPoint).toEqual({ x: 121, y: 71 });
+  expect(result.guides.map((guide) => guide.axis)).toEqual(['x']);
+  expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
+    ok: true,
+    value: result.resize,
+  });
+});
+
+test('snaps an Alt centre-resize without translating its completed proposal', () => {
+  const document = documentWithTargets([
+    rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 120, 200] }),
+  ]);
+  const input = {
+    handle: 'east' as const,
+    startPoint: { x: 110, y: 45 },
+    currentPoint: { x: 119, y: 45 },
+    preserveAspectRatio: false,
+    fromCenter: true,
+  };
+  const aligned = unwrap(
+    prepareSelectionAlignment(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const resized = unwrap(
+    prepareSelectionResize(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+
+  const result = unwrap(aligned.resolveResize(input));
+  expect(result.currentPoint).toEqual({ x: 120, y: 45 });
+  expect(result.resize.bounds.minX).toBeCloseTo(0);
+  expect(result.resize.bounds.minY).toBe(20);
+  expect(result.resize.bounds.maxX).toBeCloseTo(120);
+  expect(result.resize.bounds.maxY).toBe(70);
+  expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
+    ok: true,
+    value: result.resize,
+  });
+});
+
+test('preserves a flipped resize with no invented snap translation', () => {
+  const document = documentWithTargets([
+    rectangle({ id: IDS.target, transform: [1, 0, 0, 1, -5, 200] }),
+  ]);
+  const input = {
+    handle: 'east' as const,
+    startPoint: { x: 110, y: 45 },
+    currentPoint: { x: -5, y: 45 },
+    preserveAspectRatio: false,
+    fromCenter: false,
+  };
+  const aligned = unwrap(
+    prepareSelectionAlignment(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const resized = unwrap(
+    prepareSelectionResize(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const raw = unwrap(resized.propose(input));
+
+  const result = unwrap(aligned.resolveResize(input));
+  expect(result).toEqual({ currentPoint: input.currentPoint, resize: raw, guides: [] });
+  expect(Object.isFrozen(result.currentPoint)).toBe(true);
+  expect(Object.isFrozen(result.guides)).toBe(true);
 });
 
 test('resolves every same-axis anchor pair and independent two-axis corrections', () => {

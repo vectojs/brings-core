@@ -11,6 +11,7 @@ export {
   type AlignmentAxis,
   type AlignmentGuide,
   type AlignmentMoveResult,
+  type AlignmentResizeResult,
   type PreparedSelectionAlignment,
 } from './geometry/alignment';
 export {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- 035eda7: Recompute move alignment guide extents from the final snapped selection bounds.
+
 ## 0.10.0
 
 ### Minor Changes

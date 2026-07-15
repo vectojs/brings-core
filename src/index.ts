@@ -5,6 +5,16 @@ export { createDocumentStore } from './document/store';
 export { hitTestPage, intersectPageRect, type PagePoint, type PageRect } from './geometry/hit';
 export { createPageHitIndex, type PageHitIndex } from './geometry/pageHitIndex';
 export {
+  ALIGNMENT_SNAP_THRESHOLD,
+  prepareSelectionAlignment,
+  type AlignmentAnchor,
+  type AlignmentAxis,
+  type AlignmentGuide,
+  type AlignmentMoveResult,
+  type AlignmentResizeResult,
+  type PreparedSelectionAlignment,
+} from './geometry/alignment';
+export {
   prepareSelectionResize,
   type PreparedSelectionResize,
   type ResizeBounds,

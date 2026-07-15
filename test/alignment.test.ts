@@ -106,6 +106,35 @@ test('prepares immutable move alignment and resolves a max-to-min snap', () => {
   expect(Object.isFrozen(result.guides[0])).toBe(true);
 });
 
+test('derives move guide extents from the final snapped bounds', () => {
+  const prepared = unwrap(
+    prepareSelectionAlignment(
+      documentWithTargets(
+        [rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 300, 20] })],
+        rectangle({ transform: [1, 0, 0, 1, 100, 20] }),
+      ),
+      { nodeIds: [FIXTURE_IDS.rectangle], activeNodeId: FIXTURE_IDS.rectangle },
+    ),
+  );
+
+  const result = unwrap(prepared.resolveMove({ x: 96, y: 0 }));
+  const horizontalGuide = result.guides.find((guide) => guide.axis === 'y');
+  expect(result.delta).toEqual({ x: 100, y: 0 });
+  expect(horizontalGuide).toMatchObject({
+    coordinate: 20,
+    minExtent: 200,
+    maxExtent: 400,
+  });
+
+  const replay = unwrap(prepared.resolveMove({ x: 96, y: 0 }));
+  expect(Object.isFrozen(result)).toBe(true);
+  expect(Object.isFrozen(result.guides)).toBe(true);
+  expect(Object.isFrozen(horizontalGuide)).toBe(true);
+  expect(replay).not.toBe(result);
+  expect(replay.guides).not.toBe(result.guides);
+  expect(replay.guides[1]).not.toBe(result.guides[1]);
+});
+
 test('uses an inclusive six-unit threshold and rejects farther candidates', () => {
   const prepared = unwrap(
     prepareSelectionAlignment(

@@ -216,6 +216,46 @@ test('resolves a corner resize on both axes using the exact returned pointer', (
   const result = unwrap(aligned.resolveResize(input));
   expect(result.currentPoint).toEqual({ x: 120, y: 80 });
   expect(result.guides.map((guide) => guide.axis)).toEqual(['x', 'y']);
+  expect(result.guides.every((guide) => Object.isFrozen(guide))).toBe(true);
+  const replay = unwrap(aligned.resolveResize(input));
+  expect(replay.guides).not.toBe(result.guides);
+  expect(replay.guides[0]).not.toBe(result.guides[0]);
+  expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
+    ok: true,
+    value: result.resize,
+  });
+});
+
+test('accepts fractional resize bounds with bounded IEEE-754 residue and exact proposal replay', () => {
+  const source = rectangle({ transform: [1, 0, 0, 1, 10.1, 20], width: 99.9 });
+  const document = documentWithTargets(
+    [rectangle({ id: IDS.target, transform: [1, 0, 0, 1, 120.2, 200] })],
+    source,
+  );
+  const input = {
+    handle: 'east' as const,
+    startPoint: { x: 110, y: 45 },
+    currentPoint: { x: 119.2, y: 45 },
+    preserveAspectRatio: false,
+    fromCenter: false,
+  };
+  const aligned = unwrap(
+    prepareSelectionAlignment(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+  const resized = unwrap(
+    prepareSelectionResize(document, {
+      nodeIds: [FIXTURE_IDS.rectangle],
+      activeNodeId: FIXTURE_IDS.rectangle,
+    }),
+  );
+
+  const result = unwrap(aligned.resolveResize(input));
+  expect(result.currentPoint).toEqual({ x: 120.2, y: 45 });
+  expect(Math.abs(result.resize.bounds.maxX - 120.2)).toBeGreaterThan(0);
+  expect(Math.abs(result.resize.bounds.maxX - 120.2)).toBeLessThan(1e-9);
   expect(resized.propose({ ...input, currentPoint: result.currentPoint })).toEqual({
     ok: true,
     value: result.resize,

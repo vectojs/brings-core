@@ -675,6 +675,150 @@ test('rejects invalid, cyclic, locked, cross-page, and no-change layer moves ato
   expect(JSON.stringify(before)).toBe(source);
 });
 
+test('groups canonical sibling roots and ungroups them without changing page-space geometry', () => {
+  const before = propertyDocument();
+  const beforeFramePage = unwrap(pageMatrixForNode(before, ids.frame, '/nodeIds/0'));
+  const beforeTextPage = unwrap(pageMatrixForNode(before, ids.sibling, '/nodeIds/1'));
+  const grouped = unwrap(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.sibling, ids.frame],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  );
+  const groupDocument = documentFromContent(before, grouped, 1);
+  expect(groupDocument.pages[0]?.rootNodeIds.map(String)).toEqual([ids.emptyGroup, ids.group]);
+  expect(groupDocument.nodes.find((node) => node.id === ids.emptyGroup)).toMatchObject({
+    type: 'group',
+    name: 'Selection',
+    parentId: null,
+    transform: [1, 0, 0, 1, 0, 0],
+    childIds: [ids.frame, ids.sibling],
+  });
+  expect(pageMatrixForNode(groupDocument, ids.frame, '/nodeIds/0')).toEqual({
+    ok: true,
+    value: beforeFramePage,
+  });
+  expect(pageMatrixForNode(groupDocument, ids.sibling, '/nodeIds/1')).toEqual({
+    ok: true,
+    value: beforeTextPage,
+  });
+
+  const ungrouped = unwrap(
+    planCommand(groupDocument, { kind: 'ungroup-node', nodeId: ids.emptyGroup }),
+  );
+  // Grouping non-contiguous roots intentionally collapses them into one layer
+  // at the earliest target slot. Ungrouping restores that Group's child order
+  // at the same slot instead of trying to reconstruct unrelated layer gaps.
+  const ungroupedDocument = documentFromContent(before, ungrouped, 2);
+  expect(ungroupedDocument.pages[0]?.rootNodeIds.map(String)).toEqual([
+    ids.frame,
+    ids.sibling,
+    ids.group,
+  ]);
+  expect(pageMatrixForNode(ungroupedDocument, ids.frame, '/nodeIds/0')).toEqual({
+    ok: true,
+    value: beforeFramePage,
+  });
+  expect(pageMatrixForNode(ungroupedDocument, ids.sibling, '/nodeIds/1')).toEqual({
+    ok: true,
+    value: beforeTextPage,
+  });
+
+  const ungroupedExisting = unwrap(
+    planCommand(before, { kind: 'ungroup-node', nodeId: ids.group }),
+  );
+  const existingGroupDocument = documentFromContent(before, ungroupedExisting, 1);
+  expect(existingGroupDocument.pages[0]?.rootNodeIds.map(String)).toEqual([
+    ids.frame,
+    ids.child,
+    ids.sibling,
+  ]);
+  expect(existingGroupDocument.nodes.find((node) => node.id === ids.child)).toMatchObject({
+    parentId: null,
+    transform: [1, 0, 0, 1, 336, 64],
+  });
+});
+
+test('round-trips contiguous sibling grouping byte-for-byte', () => {
+  const before = propertyDocument();
+  const grouped = unwrap(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.sibling, ids.group],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  );
+  const groupDocument = documentFromContent(before, grouped, 1);
+  const ungrouped = unwrap(
+    planCommand(groupDocument, { kind: 'ungroup-node', nodeId: ids.emptyGroup }),
+  );
+  expect(JSON.stringify(ungrouped)).toBe(
+    JSON.stringify({
+      name: before.name,
+      pageOrder: before.pageOrder,
+      activePageId: before.activePageId,
+      pages: before.pages,
+      nodes: before.nodes,
+    }),
+  );
+});
+
+test('rejects invalid, mixed-parent, overlapping, locked, and non-Group hierarchy commands atomically', () => {
+  const before = propertyDocument();
+  const source = JSON.stringify(before);
+
+  expect(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.frame, ids.frame],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  ).toEqual({ ok: false, error: { code: 'id.duplicate', path: '/nodeIds/1' } });
+  expect(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.rectangle, ids.frame],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.hierarchy-overlap', path: '/nodeIds/1' } });
+  expect(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.rectangle, ids.child],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.group-parent-mismatch', path: '/nodeIds/1' } });
+  expect(
+    planCommand(before, {
+      kind: 'group-nodes',
+      nodeIds: [ids.frame, ids.sibling],
+      group: { id: ids.group, name: 'Selection' },
+    }),
+  ).toEqual({ ok: false, error: { code: 'id.duplicate', path: '/group/id' } });
+  expect(planCommand(before, { kind: 'ungroup-node', nodeId: ids.frame })).toEqual({
+    ok: false,
+    error: { code: 'node.not-group', path: '/nodeId' },
+  });
+
+  const locked = unwrap(
+    planCommand(before, {
+      kind: 'set-node-properties',
+      nodeIds: [ids.frame],
+      patch: { locked: true },
+    }),
+  );
+  const lockedDocument = documentFromContent(before, locked, 1);
+  expect(
+    planCommand(lockedDocument, {
+      kind: 'group-nodes',
+      nodeIds: [ids.frame, ids.sibling],
+      group: { id: ids.emptyGroup, name: 'Selection' },
+    }),
+  ).toEqual({ ok: false, error: { code: 'node.locked', path: '/nodes/0/locked' } });
+  expect(JSON.stringify(before)).toBe(source);
+});
+
 test('enforces page index and no-change contracts', () => {
   const before = initialDocument();
   expect(planCommand(before, null as unknown as never)).toEqual({

@@ -19,7 +19,7 @@ import {
   withPagesAndNodes,
   withParent,
 } from './commandShared';
-import { moveNodes, setNodeProperties } from './nodeCommands';
+import { groupNodes, moveNodes, setNodeProperties, ungroupNode } from './nodeCommands';
 import type {
   BringsDocument,
   DocumentCommandInput,
@@ -479,6 +479,10 @@ export function planCommand(
       return setNodeProperties(before, command);
     case 'move-nodes':
       return moveNodes(before, command);
+    case 'group-nodes':
+      return groupNodes(before, command);
+    case 'ungroup-node':
+      return ungroupNode(before, command);
     default:
       return failure('command.kind', '/kind');
   }

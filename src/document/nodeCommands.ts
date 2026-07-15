@@ -19,6 +19,7 @@ import { validateMatrixInput } from './validate';
 import type {
   BringsDocument,
   DocumentContent,
+  GroupNodesCommand,
   Matrix,
   MoveNodesCommand,
   NodeId,
@@ -26,6 +27,7 @@ import type {
   Result,
   SceneNode,
   SetNodePropertiesCommand,
+  UngroupNodeCommand,
 } from './types';
 
 const propertyKeys = [
@@ -416,4 +418,155 @@ export function moveNodes(
   if (!candidate.ok) return candidate;
   if (contentMatchesDocument(candidate.value, before)) return failure('command.no-change', '/');
   return candidate;
+}
+
+/** Plan one identity-transform Group around canonical active-page sibling roots. */
+export function groupNodes(
+  before: BringsDocument,
+  command: GroupNodesCommand,
+): Result<DocumentContent> {
+  const groupId = commandId(command.group.id, '/group/id');
+  if (!groupId.ok) return groupId;
+  if (
+    [before.id, ...before.pageOrder, ...before.nodes.map((node) => node.id)].includes(groupId.value)
+  ) {
+    return failure('id.duplicate', '/group/id');
+  }
+  const targets = validateTargets(before, command.nodeIds);
+  if (!targets.ok) return targets;
+  const overlap = validateHierarchyOverlap(before, targets.value);
+  if (!overlap.ok) return overlap;
+  const roots = [...targets.value].sort((left, right) => left.nodeIndex - right.nodeIndex);
+  const parentId = roots[0]!.node.parentId;
+  for (const root of roots) {
+    if (root.node.parentId !== parentId) {
+      return failure('command.group-parent-mismatch', `/nodeIds/${root.inputIndex}`);
+    }
+  }
+
+  const protectedIds = new Set<string>();
+  for (const root of roots) {
+    for (const nodeId of ancestorIds(before, root.node.id)) protectedIds.add(nodeId);
+  }
+  const locked = firstLocked(before, protectedIds);
+  if (!locked.ok) return locked;
+
+  let originalChildren: readonly NodeId[];
+  if (parentId === null) {
+    originalChildren = before.pages[pageIndex(before, before.activePageId)]!.rootNodeIds;
+  } else {
+    const parent = nodeMap(before).get(parentId)?.node;
+    if (parent === undefined || !isContainer(parent)) {
+      return failure('node.destination-not-container', '/nodeIds/0');
+    }
+    originalChildren = parent.childIds;
+  }
+  // VMT node storage order is not a paint-order contract. Layer commands must
+  // preserve the owning container's explicit child order instead.
+  roots.sort(
+    (left, right) =>
+      originalChildren.indexOf(left.node.id) - originalChildren.indexOf(right.node.id),
+  );
+  const insertionIndex = Math.min(...roots.map((root) => originalChildren.indexOf(root.node.id)));
+  const rootIds = new Set<NodeId>(roots.map((root) => root.node.id));
+  const pages: MutablePage[] = before.pages.map((page) => ({
+    id: page.id,
+    name: page.name,
+    rootNodeIds: page.rootNodeIds.filter((nodeId) => !rootIds.has(nodeId)),
+  }));
+  const nodes = new Map<NodeId, SceneNode>(before.nodes.map((node) => [node.id, cloneNode(node)]));
+  if (parentId === null) {
+    const rootsAfterRemoval = pages[pageIndex(before, before.activePageId)]!.rootNodeIds;
+    rootsAfterRemoval.splice(insertionIndex, 0, groupId.value as NodeId);
+  } else {
+    const parent = nodes.get(parentId)!;
+    if (!isContainer(parent)) return failure('node.destination-not-container', '/parentId');
+    const childrenAfterRemoval = parent.childIds.filter((childId) => !rootIds.has(childId));
+    childrenAfterRemoval.splice(insertionIndex, 0, groupId.value as NodeId);
+    nodes.set(parentId, withChildIds(parent, childrenAfterRemoval));
+  }
+
+  nodes.set(groupId.value as NodeId, {
+    id: groupId.value as NodeId,
+    type: 'group',
+    name: command.group.name,
+    parentId,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    transform: [1, 0, 0, 1, 0, 0],
+    childIds: roots.map((root) => root.node.id) as [NodeId, ...NodeId[]],
+  });
+  for (const root of roots) {
+    nodes.set(root.node.id, withParent(nodes.get(root.node.id)!, groupId.value as NodeId));
+  }
+
+  return commitCandidate(before, {
+    name: before.name,
+    pageOrder: pages.map((page) => page.id),
+    activePageId: before.activePageId,
+    pages,
+    nodes: [...nodes.values()],
+  });
+}
+
+/** Plan one Group dissolution while preserving child ordering and page geometry. */
+export function ungroupNode(
+  before: BringsDocument,
+  command: UngroupNodeCommand,
+): Result<DocumentContent> {
+  const groupId = commandId(command.nodeId, '/nodeId');
+  if (!groupId.ok) return groupId;
+  const entry = nodeMap(before).get(groupId.value);
+  if (entry === undefined) return failure('node.not-found', '/nodeId');
+  if (pageForNode(before, entry.node.id) !== before.activePageId) {
+    return failure('command.source-page-mismatch', '/nodeId');
+  }
+  if (entry.node.type !== 'group') return failure('node.not-group', '/nodeId');
+  const group = entry.node;
+  const locked = firstLocked(before, ancestorIds(before, group.id));
+  if (!locked.ok) return locked;
+
+  const pages: MutablePage[] = before.pages.map((page) => ({
+    id: page.id,
+    name: page.name,
+    rootNodeIds: [...page.rootNodeIds],
+  }));
+  const nodes = new Map<NodeId, SceneNode>(before.nodes.map((node) => [node.id, cloneNode(node)]));
+  const childIds = [...group.childIds];
+  for (let index = 0; index < childIds.length; index += 1) {
+    const child = nodes.get(childIds[index]!)!;
+    const transform = multiplyMatrices(group.transform, child.transform);
+    if (!transform.every(Number.isFinite)) {
+      return failure('matrix.computation-overflow', `/nodeId/children/${index}/transform`);
+    }
+    const validated = validateMatrixInput(transform, `/nodeId/children/${index}/transform`);
+    if (!validated.ok) return validated;
+    nodes.set(child.id, {
+      ...withParent(child, group.parentId),
+      transform: [...validated.value],
+    } as SceneNode);
+  }
+
+  if (group.parentId === null) {
+    const roots = pages[pageIndex(before, before.activePageId)]!.rootNodeIds;
+    const index = roots.indexOf(group.id);
+    roots.splice(index, 1, ...childIds);
+  } else {
+    const parent = nodes.get(group.parentId)!;
+    if (!isContainer(parent)) return failure('node.destination-not-container', '/nodeId');
+    const children = [...parent.childIds];
+    const index = children.indexOf(group.id);
+    children.splice(index, 1, ...childIds);
+    nodes.set(group.parentId, withChildIds(parent, children));
+  }
+  nodes.delete(group.id);
+
+  return commitCandidate(before, {
+    name: before.name,
+    pageOrder: pages.map((page) => page.id),
+    activePageId: before.activePageId,
+    pages,
+    nodes: [...nodes.values()],
+  });
 }

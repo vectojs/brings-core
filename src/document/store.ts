@@ -8,9 +8,10 @@ import {
 import { planCommand } from './plan';
 import { nextDocumentRevision } from './revision';
 import { reconcileStructuralSelection, resolveStructuralSelection } from './selection';
-import { createDocument } from './validate';
+import { createDocument, validateDocument } from './validate';
 import type {
   BringsDocument,
+  BringsDocumentInput,
   CreateDocumentInput,
   DocumentCommandInput,
   DocumentContent,
@@ -140,6 +141,13 @@ class InMemoryBringsDocumentStore implements BringsDocumentStore {
 /** Create a revision-zero document and its atomic history owner. */
 export function createDocumentStore(input: CreateDocumentInput): Result<BringsDocumentStore> {
   const document = createDocument(input);
+  if (!document.ok) return document;
+  return success(new InMemoryBringsDocumentStore(document.value));
+}
+
+/** Open a validated detached document with fresh ephemeral selection and history state. */
+export function openDocumentStore(input: BringsDocumentInput): Result<BringsDocumentStore> {
+  const document = validateDocument(input);
   if (!document.ok) return document;
   return success(new InMemoryBringsDocumentStore(document.value));
 }

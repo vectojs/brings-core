@@ -40,6 +40,7 @@ import {
   createDocumentStore,
   createPageHitIndex,
   intersectPageRect,
+  openDocumentStore,
   resolveStructuralSelection,
   type Result,
 } from '@vectojs/brings-core';
@@ -218,6 +219,28 @@ if (storeResult.ok) {
   console.log(snapshot.document.revision); // 0
 }
 ```
+
+To continue editing a validated schema-v1 document, open it with a fresh
+ephemeral selection and fresh in-memory undo/redo stacks:
+
+```ts
+const opened = openDocumentStore(existingDocument);
+if (!opened.ok) throw new Error(`${opened.error.code} at ${opened.error.path}`);
+
+const importedRevision = opened.value.snapshot().document.revision;
+unwrap(
+  opened.value.execute({
+    kind: 'rename-page',
+    pageId: opened.value.snapshot().document.activePageId,
+    name: 'Canvas',
+  }),
+);
+console.log(opened.value.snapshot().document.revision); // importedRevision + 1
+```
+
+`openDocumentStore` validates and detaches the input before returning. Opening
+is not a history entry; the first successful command continues from the
+imported revision, and later undo/redo revisions remain monotonic.
 
 ## Development
 

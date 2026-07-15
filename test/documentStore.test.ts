@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { createDocumentStore, validateDocument } from '../src';
+import { createDocumentStore, openDocumentStore, validateDocument } from '../src';
 import { nextDocumentRevision } from '../src/document/revision';
 
 const ids = {
@@ -108,6 +108,62 @@ test('executes, undoes, and redoes with identity preservation and monotonic revi
   expect(store.redo().ok).toBe(true);
   expect(store.snapshot().document.revision).toBe(3);
   expect(store.snapshot().document.id).toBe(initial.document.id);
+});
+
+test('opens an existing document with detached ownership and empty ephemeral state', () => {
+  const source = createStore().snapshot().document as unknown as {
+    revision: number;
+    name: string;
+    pages: { name: string }[];
+  };
+  source.revision = 7;
+  const opened = openDocumentStore(source as never);
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+
+  source.name = 'Caller mutation';
+  source.pages[0]!.name = 'Caller page mutation';
+
+  expect(opened.value.snapshot()).toMatchObject({
+    document: { revision: 7, name: 'Untitled', pages: [{ name: 'Page 1' }] },
+    selection: { nodeIds: [], activeNodeId: null },
+    undoDepth: 0,
+    redoDepth: 0,
+  });
+});
+
+test('continues existing revisions monotonically through execute undo and redo', () => {
+  const source = createStore().snapshot().document as unknown as { revision: number };
+  source.revision = 7;
+  const opened = unwrap(openDocumentStore(source as never));
+
+  expect(opened.execute({ kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }).ok).toBe(
+    true,
+  );
+  expect(opened.snapshot()).toMatchObject({
+    document: { revision: 8 },
+    undoDepth: 1,
+    redoDepth: 0,
+  });
+  expect(opened.undo().ok).toBe(true);
+  expect(opened.snapshot()).toMatchObject({
+    document: { revision: 9 },
+    undoDepth: 0,
+    redoDepth: 1,
+  });
+  expect(opened.redo().ok).toBe(true);
+  expect(opened.snapshot()).toMatchObject({
+    document: { revision: 10 },
+    undoDepth: 1,
+    redoDepth: 0,
+  });
+});
+
+test('rejects malformed existing documents before creating a store', () => {
+  expect(openDocumentStore({ revision: -1 } as never)).toEqual({
+    ok: false,
+    error: { code: 'field.required', path: '/id' },
+  });
 });
 
 test('records Frame and nested Rectangle creation as independent undoable intentions', () => {

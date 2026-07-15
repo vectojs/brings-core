@@ -1,12 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 ### Minor Changes
 
-- Add atomic compatible node-property patches, deterministic same-page layer
-  movement/reparenting, identity-transform grouping/ungrouping, and
-  post-command selection reconciliation for renderer-free editor consumers.
+- bb68c79: Add atomic property, layer movement, grouping, ungrouping, and selection reconciliation commands for renderer-free editor consumers.
 
 ## 0.10.1
 

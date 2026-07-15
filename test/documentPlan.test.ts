@@ -21,6 +21,7 @@ const ids = {
   nestedGroup: '99999999-9999-4999-8999-999999999999',
   sibling: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   emptyGroup: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  createdText: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -229,6 +230,33 @@ function createRectangleCommand(parentId: string = ids.frame) {
   };
 }
 
+function createTextCommand() {
+  return {
+    kind: 'create-text' as const,
+    pageId: ids.page1,
+    parentId: null,
+    index: 0,
+    text: {
+      id: ids.createdText,
+      name: 'Heading',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 40, 60],
+      content: 'Hello Brings',
+      fontFamilies: ['Inter', 'system-ui'],
+      fontWeight: 600,
+      fontSize: 24,
+      lineHeight: 32,
+      horizontalAlign: 'left' as const,
+      layoutMode: 'fixedBox' as const,
+      width: 260,
+      height: 40,
+      fill: { type: 'solid' as const, r: 0.1, g: 0.1, b: 0.1, a: 1 },
+    },
+  };
+}
+
 test('creates an empty Frame then a nested Rectangle through intention-level commands', () => {
   const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
   const afterFrame = documentFromContent(initialDocument(), frame, 1);
@@ -243,6 +271,36 @@ test('creates an empty Frame then a nested Rectangle through intention-level com
         { id: ids.rectangle, type: 'rectangle', parentId: ids.frame },
       ],
     },
+  });
+});
+
+test('creates a detached Text leaf with validated typography fields', () => {
+  const command = createTextCommand();
+  const result = planCommand(initialDocument(), command);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      pages: [{ rootNodeIds: [ids.createdText] }],
+      nodes: [
+        {
+          id: ids.createdText,
+          type: 'text',
+          content: 'Hello Brings',
+          fontFamilies: ['Inter', 'system-ui'],
+          fontWeight: 600,
+          fontSize: 24,
+          lineHeight: 32,
+        },
+      ],
+    },
+  });
+  command.text.fontFamilies[0] = 'Mutated';
+  command.text.fill.r = 1;
+  if (!result.ok) return;
+  expect(result.value.nodes[0]).toMatchObject({
+    fontFamilies: ['Inter', 'system-ui'],
+    fill: { r: 0.1 },
   });
 });
 

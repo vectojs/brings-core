@@ -31,6 +31,7 @@ export type {
   BringsError,
   CreateFrameInput,
   CreateRectangleInput,
+  CreateTextInput,
   CommonNode,
   CreateDocumentInput,
   DocumentCommandInput,

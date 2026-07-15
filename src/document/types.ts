@@ -272,6 +272,57 @@ export type TransformDeltaInput = Readonly<{
   delta: readonly number[];
 }>;
 
+/** JSON-compatible mutable fields accepted by one atomic node property command. */
+export type NodePropertyPatchInput = Readonly<{
+  name?: string;
+  visible?: boolean;
+  locked?: boolean;
+  opacity?: number;
+  width?: number;
+  height?: number;
+  cornerRadii?: readonly number[];
+  fill?: SolidPaintInput | null;
+  background?: SolidPaintInput | null;
+  stroke?: StrokeInput | null;
+  clipChildren?: boolean;
+  content?: string;
+  fontFamilies?: readonly string[];
+  fontWeight?: number;
+  fontSize?: number;
+  lineHeight?: number;
+  horizontalAlign?: 'left' | 'center' | 'right';
+  layoutMode?: 'fixedBox' | 'autoWidth';
+}>;
+
+/** Atomic property patch for one or more active-page nodes. */
+export type SetNodePropertiesCommand = Readonly<{
+  kind: 'set-node-properties';
+  nodeIds: readonly string[];
+  patch: NodePropertyPatchInput;
+}>;
+
+/** Deterministic reorder or page-geometry-preserving reparent operation. */
+export type MoveNodesCommand = Readonly<{
+  kind: 'move-nodes';
+  nodeIds: readonly string[];
+  pageId: string;
+  parentId: string | null;
+  index: number;
+}>;
+
+/** Create one non-visual Group around active-page sibling roots. */
+export type GroupNodesCommand = Readonly<{
+  kind: 'group-nodes';
+  nodeIds: readonly string[];
+  group: Readonly<{ id: string; name: string }>;
+}>;
+
+/** Dissolve one Group while preserving child order and page-space geometry. */
+export type UngroupNodeCommand = Readonly<{
+  kind: 'ungroup-node';
+  nodeId: string;
+}>;
+
 /** The initial narrow command vocabulary for the document tracer. */
 export type DocumentCommandInput =
   | Readonly<{ kind: 'create-page'; id: string; name: string; index: number }>
@@ -303,4 +354,8 @@ export type DocumentCommandInput =
     }>
   | Readonly<{ kind: 'apply-transform-delta' } & TransformDeltaInput>
   | Readonly<{ kind: 'delete-nodes'; nodeIds: readonly string[] }>
-  | Readonly<{ kind: 'delete-node'; nodeId: string }>;
+  | Readonly<{ kind: 'delete-node'; nodeId: string }>
+  | SetNodePropertiesCommand
+  | MoveNodesCommand
+  | GroupNodesCommand
+  | UngroupNodeCommand;

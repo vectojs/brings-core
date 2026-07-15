@@ -7,7 +7,7 @@ import {
 } from './clone';
 import { planCommand } from './plan';
 import { nextDocumentRevision } from './revision';
-import { resolveStructuralSelection } from './selection';
+import { reconcileStructuralSelection, resolveStructuralSelection } from './selection';
 import { createDocument } from './validate';
 import type {
   BringsDocument,
@@ -103,10 +103,7 @@ class InMemoryBringsDocumentStore implements BringsDocumentStore {
       return success(this.snapshot());
     }
 
-    const afterSelection =
-      command.kind === 'apply-transform-delta'
-        ? cloneStructuralSelection(this.selection)
-        : emptyStructuralSelection();
+    const afterSelection = reconcileStructuralSelection(next.value, this.selection);
     const entry = createHistoryEntry(this.document, planned.value, this.selection, afterSelection);
     this.document = next.value;
     this.selection = afterSelection;

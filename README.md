@@ -18,9 +18,12 @@ activation; intention-level Frame and Rectangle creation; detached-subtree
 insertion and atomic multi-subtree deletion; normalized ephemeral selection;
 renderer-free point and rectangle intersection; reusable immutable page-hit
 indexes; page-space affine transform deltas; and atomic undo/redo with monotonic
-revisions. It also prepares detached selection resize plans with recursive model
-bounds, eight handles, modifier-aware affine proposals, and exact transform
-commands without importing a renderer or pointer-event type.
+revisions. It also provides atomic compatible property patches, deterministic
+same-page layer movement and reparenting, Figma-like sibling grouping and
+ungrouping, and post-command selection reconciliation. It prepares detached
+selection resize plans with recursive model bounds, eight handles,
+modifier-aware affine proposals, and exact transform commands without importing
+a renderer or pointer-event type.
 
 The Core accepts caller-provided lowercase RFC-4122 UUIDs and has no random-ID
 policy. Fallible document, selection, index-construction, and rectangle-query
@@ -174,9 +177,26 @@ scaling; callers normally map Alt and Shift to those semantic modifiers. Crossin
 the anchor produces a signed scale. Singular and computed-overflow proposals are
 rejected without changing the prepared plan or caller-owned input.
 
-The package does not yet include property commands, grouping/reparenting, resize
-snapping, rotation editing, codec parsing or serialization, persistence, or
-browser adapters. Those remain independently verified slices.
+The package does not yet include rotation editing, codec parsing or
+serialization, persistence, or browser adapters. Those remain independently
+verified slices.
+
+## Layer and property commands
+
+All durable editor changes go through `store.execute`. `set-node-properties`
+applies one compatible field patch atomically to one or more active-page nodes.
+`move-nodes` reorders canonical roots or reparents them within the active page
+while preserving their page-space transforms. `group-nodes` accepts sibling
+roots and creates an identity-transform Group at the earliest selected layer
+slot; `ungroup-node` restores children at the Group's current slot and composes
+its transform into each child. Non-contiguous grouping deliberately collapses
+intervening layer gaps rather than inventing an unstable restoration rule.
+
+The store preserves a selection across successful edits whenever the selected
+nodes still exist, are visible and unlocked, and remain on the active page.
+Deleted, hidden, locked, and dissolved Group nodes are removed from selection
+without turning an otherwise valid command into an error. Undo and redo restore
+the corresponding captured selection exactly.
 
 ## Minimal document creation
 

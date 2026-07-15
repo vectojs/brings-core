@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Minor Changes
+
+- Add atomic compatible node-property patches, deterministic same-page layer
+  movement/reparenting, identity-transform grouping/ungrouping, and
+  post-command selection reconciliation for renderer-free editor consumers.
+
 ## 0.10.1
 
 ### Patch Changes
@@ -78,7 +86,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased
+## Historical unreleased notes
 
 - Reject finite affine matrices whose determinant or inverse computation
   overflows, using the stable `matrix.computation-overflow` error boundary.

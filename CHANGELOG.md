@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- ae2c97e: Add immutable prepared selection alignment snapping for deterministic move and axis-aligned resize previews, including exact pointer replay and guide diagnostics.
+
 ## 0.9.1
 
 ### Patch Changes

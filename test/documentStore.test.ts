@@ -11,6 +11,7 @@ const ids = {
   rectangle: '66666666-6666-4666-8666-666666666666',
   secondRectangle: '77777777-7777-4777-8777-777777777777',
   group: '88888888-8888-4888-8888-888888888888',
+  text: '99999999-9999-4999-8999-999999999999',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -165,6 +166,42 @@ test('records Frame and nested Rectangle creation as independent undoable intent
     ids.frame,
     ids.rectangle,
   ]);
+});
+
+test('records Text creation as one undoable intention', () => {
+  const store = createStore();
+  const created = store.execute({
+    kind: 'create-text',
+    pageId: ids.page1,
+    parentId: null,
+    index: 0,
+    text: {
+      id: ids.text,
+      name: 'Text',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 20, 30],
+      content: 'Editable',
+      fontFamilies: ['Inter'],
+      fontWeight: 400,
+      fontSize: 16,
+      lineHeight: 24,
+      horizontalAlign: 'left',
+      layoutMode: 'fixedBox',
+      width: 120,
+      height: 24,
+      fill: { type: 'solid', r: 0, g: 0, b: 0, a: 1 },
+    },
+  });
+
+  expect(created.ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({ document: { revision: 1 }, undoDepth: 1 });
+  expect(store.snapshot().document.nodes).toMatchObject([{ id: ids.text, type: 'text' }]);
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot().document.nodes).toEqual([]);
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot().document.nodes).toMatchObject([{ content: 'Editable' }]);
 });
 
 test('normalizes ephemeral selection without changing durable state or history', () => {

@@ -247,6 +247,28 @@ function createRectangle(
   });
 }
 
+function createText(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'create-text' }>,
+): Result<DocumentContent> {
+  const text = {
+    ...command.text,
+    type: 'text' as const,
+    parentId: null,
+    transform: [...command.text.transform],
+    fontFamilies: [...command.text.fontFamilies],
+    fill: { ...command.text.fill },
+  };
+  return insertSubtree(before, {
+    kind: 'insert-subtree',
+    pageId: command.pageId,
+    parentId: command.parentId,
+    index: command.index,
+    rootId: command.text.id,
+    nodes: [text],
+  });
+}
+
 function deleteNodes(
   before: BringsDocument,
   command: Extract<DocumentCommandInput, { kind: 'delete-nodes' }>,
@@ -467,6 +489,8 @@ export function planCommand(
       return createFrame(before, command);
     case 'create-rectangle':
       return createRectangle(before, command);
+    case 'create-text':
+      return createText(before, command);
     case 'insert-subtree':
       return insertSubtree(before, command);
     case 'apply-transform-delta':

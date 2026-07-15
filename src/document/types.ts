@@ -266,6 +266,9 @@ export type CreateFrameInput = Omit<FrameNodeInput, 'type' | 'parentId' | 'child
 /** Explicit mutable fields for the first Rectangle creation command. */
 export type CreateRectangleInput = Omit<RectangleNodeInput, 'type' | 'parentId'>;
 
+/** Explicit mutable fields for one Text creation command. */
+export type CreateTextInput = Omit<TextNodeInput, 'type' | 'parentId'>;
+
 /** Raw targets and page-space affine delta for one transform intention. */
 export type TransformDeltaInput = Readonly<{
   nodeIds: readonly string[];
@@ -343,6 +346,13 @@ export type DocumentCommandInput =
       parentId: string | null;
       index: number;
       rectangle: CreateRectangleInput;
+    }>
+  | Readonly<{
+      kind: 'create-text';
+      pageId: string;
+      parentId: string | null;
+      index: number;
+      text: CreateTextInput;
     }>
   | Readonly<{
       kind: 'insert-subtree';

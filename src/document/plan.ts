@@ -19,6 +19,7 @@ import {
   withPagesAndNodes,
   withParent,
 } from './commandShared';
+import { setNodeProperties } from './nodeCommands';
 import type {
   BringsDocument,
   DocumentCommandInput,
@@ -474,6 +475,8 @@ export function planCommand(
       return deleteNodes(before, command);
     case 'delete-node':
       return deleteNode(before, command);
+    case 'set-node-properties':
+      return setNodeProperties(before, command);
     default:
       return failure('command.kind', '/kind');
   }

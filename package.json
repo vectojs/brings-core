@@ -1,6 +1,6 @@
 {
   "name": "@vectojs/brings-core",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Pure local-first vector document, geometry, history, and interchange primitives for Brings.",
   "license": "MIT",
   "type": "module",

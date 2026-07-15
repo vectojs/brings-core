@@ -60,6 +60,42 @@ function hasSelectedAncestor(
   return false;
 }
 
+/**
+ * Reconcile a previously validated selection with a newly committed document.
+ *
+ * Durable commands may delete, hide, lock, move, group, or ungroup nodes. A
+ * stale selection must never turn such a successful command into an error, so
+ * this intentionally drops ineligible entries instead of reporting failures.
+ */
+export function reconcileStructuralSelection(
+  document: BringsDocument,
+  selection: StructuralSelection,
+): StructuralSelection {
+  const nodes = nodeMap(document);
+  const unique: SceneNode[] = [];
+  const seen = new Set<string>();
+  for (const nodeId of selection.nodeIds) {
+    if (seen.has(nodeId)) continue;
+    const node = nodes.get(nodeId);
+    if (
+      node === undefined ||
+      !belongsToActivePage(document, nodes, node) ||
+      !isSelectionEligible(nodes, node)
+    ) {
+      continue;
+    }
+    seen.add(nodeId);
+    unique.push(node);
+  }
+  const nodeIds = unique
+    .filter((node) => !hasSelectedAncestor(nodes, node, seen))
+    .map((node) => node.id);
+  const activeNodeId = nodeIds.includes(selection.activeNodeId as NodeId)
+    ? (selection.activeNodeId as NodeId)
+    : (nodeIds.at(-1) ?? null);
+  return { nodeIds, activeNodeId };
+}
+
 /** Validate and normalize an ephemeral selection without retaining caller-owned state. */
 export function resolveStructuralSelection(
   document: BringsDocument,

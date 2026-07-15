@@ -10,6 +10,7 @@ const ids = {
   frame: '55555555-5555-4555-8555-555555555555',
   rectangle: '66666666-6666-4666-8666-666666666666',
   secondRectangle: '77777777-7777-4777-8777-777777777777',
+  group: '88888888-8888-4888-8888-888888888888',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -25,6 +26,14 @@ function createStore() {
       initialPage: { id: ids.page1, name: 'Page 1' },
     }),
   );
+}
+
+function selectionValue(store: ReturnType<typeof createStore>) {
+  const selection = store.snapshot().selection;
+  return {
+    nodeIds: selection.nodeIds.map(String),
+    activeNodeId: selection.activeNodeId === null ? null : String(selection.activeNodeId),
+  };
 }
 
 const insertFrame = {
@@ -402,6 +411,98 @@ test('records one transform intention while preserving selection through undo an
     undoDepth: 2,
     redoDepth: 0,
   });
+});
+
+test('reconciles selection after property and hierarchy commands while preserving history', () => {
+  const store = createStore();
+  expect(store.execute(insertFrameWithSibling()).ok).toBe(true);
+  expect(
+    store.setSelection({
+      nodeIds: [ids.rectangle, ids.secondRectangle],
+      activeNodeId: ids.secondRectangle,
+    }).ok,
+  ).toBe(true);
+
+  expect(
+    store.execute({
+      kind: 'set-node-properties',
+      nodeIds: [ids.rectangle],
+      patch: { name: 'Primary card' },
+    }).ok,
+  ).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.rectangle, ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+
+  expect(
+    store.execute({
+      kind: 'set-node-properties',
+      nodeIds: [ids.rectangle],
+      patch: { visible: false },
+    }).ok,
+  ).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+  expect(store.undo().ok).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.rectangle, ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+  expect(store.redo().ok).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+
+  expect(
+    store.execute({
+      kind: 'set-node-properties',
+      nodeIds: [ids.secondRectangle],
+      patch: { locked: true },
+    }).ok,
+  ).toBe(true);
+  expect(selectionValue(store)).toEqual({ nodeIds: [], activeNodeId: null });
+  expect(store.undo().ok).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+
+  expect(
+    store.execute({
+      kind: 'set-node-properties',
+      nodeIds: [ids.rectangle],
+      patch: { visible: true },
+    }).ok,
+  ).toBe(true);
+  expect(
+    store.setSelection({
+      nodeIds: [ids.rectangle, ids.secondRectangle],
+      activeNodeId: ids.secondRectangle,
+    }).ok,
+  ).toBe(true);
+  expect(
+    store.execute({
+      kind: 'group-nodes',
+      nodeIds: [ids.secondRectangle, ids.rectangle],
+      group: { id: ids.group, name: 'Cards' },
+    }).ok,
+  ).toBe(true);
+  expect(selectionValue(store)).toEqual({
+    nodeIds: [ids.rectangle, ids.secondRectangle],
+    activeNodeId: ids.secondRectangle,
+  });
+
+  expect(store.setSelection({ nodeIds: [ids.group], activeNodeId: ids.group }).ok).toBe(true);
+  expect(store.execute({ kind: 'ungroup-node', nodeId: ids.group }).ok).toBe(true);
+  expect(selectionValue(store)).toEqual({ nodeIds: [], activeNodeId: null });
+  expect(store.undo().ok).toBe(true);
+  expect(selectionValue(store)).toEqual({ nodeIds: [ids.group], activeNodeId: ids.group });
+  expect(store.redo().ok).toBe(true);
+  expect(selectionValue(store)).toEqual({ nodeIds: [], activeNodeId: null });
 });
 
 test('leaves document selection and history byte-identical after a failed transform command', () => {

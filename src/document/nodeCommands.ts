@@ -1,8 +1,28 @@
 import { cloneNode } from './clone';
-import { ancestorIds, commitCandidate, failure, nodeMap, pageForNode } from './commandShared';
+import {
+  ancestorIds,
+  commandId,
+  commandIndex,
+  commitCandidate,
+  failure,
+  firstLocked,
+  isContainer,
+  nodeMap,
+  pageForNode,
+  pageIndex,
+  subtreeIds,
+  withChildIds,
+  withParent,
+} from './commandShared';
+import { invertMatrix, multiplyMatrices, pageMatrixForNode } from '../geometry/matrix';
+import { validateMatrixInput } from './validate';
 import type {
   BringsDocument,
   DocumentContent,
+  Matrix,
+  MoveNodesCommand,
+  NodeId,
+  PageId,
   Result,
   SceneNode,
   SetNodePropertiesCommand,
@@ -131,15 +151,15 @@ function validateTargets(
   const seen = new Set<string>();
   const targets: Target[] = [];
   for (let inputIndex = 0; inputIndex < nodeIds.length; inputIndex += 1) {
-    const id = nodeIds[inputIndex];
-    if (typeof id !== 'string') return failure('id.invalid', `/nodeIds/${inputIndex}`);
-    if (seen.has(id)) return failure('id.duplicate', `/nodeIds/${inputIndex}`);
-    const entry = byId.get(id);
+    const id = commandId(nodeIds[inputIndex]!, `/nodeIds/${inputIndex}`);
+    if (!id.ok) return id;
+    if (seen.has(id.value)) return failure('id.duplicate', `/nodeIds/${inputIndex}`);
+    const entry = byId.get(id.value);
     if (entry === undefined) return failure('node.not-found', `/nodeIds/${inputIndex}`);
     if (pageForNode(before, entry.node.id) !== before.activePageId) {
       return failure('command.source-page-mismatch', `/nodeIds/${inputIndex}`);
     }
-    seen.add(id);
+    seen.add(id.value);
     targets.push({ inputIndex, node: entry.node, nodeIndex: entry.index });
   }
   return { ok: true, value: targets };
@@ -211,4 +231,189 @@ export function setNodeProperties(
   if (!committed.ok) return patchError(committed, targets.value);
   if (contentMatchesDocument(committed.value, before)) return failure('command.no-change', '/');
   return committed;
+}
+
+function validateHierarchyOverlap(
+  before: BringsDocument,
+  targets: readonly Target[],
+): Result<void> {
+  for (let left = 0; left < targets.length; left += 1) {
+    const leftDescendants = subtreeIds(before, targets[left]!.node.id);
+    for (let right = left + 1; right < targets.length; right += 1) {
+      const rightNode = targets[right]!.node;
+      if (
+        leftDescendants.has(rightNode.id) ||
+        subtreeIds(before, rightNode.id).has(targets[left]!.node.id)
+      ) {
+        return failure('command.hierarchy-overlap', `/nodeIds/${targets[right]!.inputIndex}`);
+      }
+    }
+  }
+  return { ok: true, value: undefined };
+}
+
+type MutablePage = { id: PageId; name: string; rootNodeIds: NodeId[] };
+
+function pruneEmptyGroups(pages: MutablePage[], nodes: Map<NodeId, SceneNode>): void {
+  while (true) {
+    const empty = new Set(
+      [...nodes.values()]
+        .filter((node) => node.type === 'group' && node.childIds.length === 0)
+        .map((node) => node.id),
+    );
+    if (empty.size === 0) return;
+    for (const nodeId of empty) nodes.delete(nodeId);
+    for (const page of pages) {
+      page.rootNodeIds = page.rootNodeIds.filter((nodeId) => !empty.has(nodeId));
+    }
+    for (const node of nodes.values()) {
+      if (!isContainer(node)) continue;
+      nodes.set(
+        node.id,
+        withChildIds(
+          node,
+          node.childIds.filter((childId) => !empty.has(childId)),
+        ),
+      );
+    }
+  }
+}
+
+function movedRootLocalTransforms(
+  before: BringsDocument,
+  roots: readonly Target[],
+  parentId: NodeId | null,
+): Result<ReadonlyMap<NodeId, Matrix>> {
+  const destinationPage =
+    parentId === null
+      ? ({ ok: true, value: [1, 0, 0, 1, 0, 0] as Matrix } as const)
+      : pageMatrixForNode(before, parentId, '/parentId');
+  if (!destinationPage.ok) return destinationPage;
+  const inverse = invertMatrix(destinationPage.value, '/parentId');
+  if (!inverse.ok) return inverse;
+
+  const transforms = new Map<NodeId, Matrix>();
+  for (const root of roots) {
+    if (root.node.parentId === parentId) continue;
+    const page = pageMatrixForNode(before, root.node.id, `/nodeIds/${root.inputIndex}`);
+    if (!page.ok) return page;
+    const local = multiplyMatrices(inverse.value, page.value);
+    if (!local.every(Number.isFinite)) {
+      return failure('matrix.computation-overflow', `/nodeIds/${root.inputIndex}/transform`);
+    }
+    const validated = validateMatrixInput(local, `/nodeIds/${root.inputIndex}/transform`);
+    if (!validated.ok) return validated;
+    transforms.set(root.node.id, validated.value);
+  }
+  return { ok: true, value: transforms };
+}
+
+/** Plan one deterministic active-page reorder or geometry-preserving reparent operation. */
+export function moveNodes(
+  before: BringsDocument,
+  command: MoveNodesCommand,
+): Result<DocumentContent> {
+  const pageId = commandId(command.pageId, '/pageId');
+  if (!pageId.ok) return pageId;
+  if (pageIndex(before, pageId.value) === -1) return failure('page.not-found', '/pageId');
+  if (pageId.value !== before.activePageId) {
+    return failure('command.destination-page-mismatch', '/pageId');
+  }
+
+  const targets = validateTargets(before, command.nodeIds);
+  if (!targets.ok) return targets;
+  const overlap = validateHierarchyOverlap(before, targets.value);
+  if (!overlap.ok) return overlap;
+  const roots = [...targets.value].sort((left, right) => left.nodeIndex - right.nodeIndex);
+  const movedIds = new Set<NodeId>(roots.map((root) => root.node.id));
+  const movedSubtreeIds = new Set<string>();
+  for (const root of roots) {
+    for (const nodeId of subtreeIds(before, root.node.id)) movedSubtreeIds.add(nodeId);
+  }
+
+  let parentId: NodeId | null = null;
+  if (command.parentId !== null) {
+    const parsedParent = commandId(command.parentId, '/parentId');
+    if (!parsedParent.ok) return parsedParent;
+    const parent = nodeMap(before).get(parsedParent.value);
+    if (parent === undefined) return failure('node.not-found', '/parentId');
+    if (pageForNode(before, parent.node.id) !== pageId.value) {
+      return failure('command.destination-page-mismatch', '/parentId');
+    }
+    if (!isContainer(parent.node)) return failure('node.destination-not-container', '/parentId');
+    if (movedSubtreeIds.has(parent.node.id))
+      return failure('command.destination-cycle', '/parentId');
+    parentId = parent.node.id;
+  }
+
+  const protectedIds = new Set<string>();
+  for (const root of roots) {
+    for (const nodeId of ancestorIds(before, root.node.id)) protectedIds.add(nodeId);
+  }
+  if (parentId !== null) {
+    for (const nodeId of ancestorIds(before, parentId)) protectedIds.add(nodeId);
+  }
+  const locked = firstLocked(before, protectedIds);
+  if (!locked.ok) return locked;
+
+  const transforms = movedRootLocalTransforms(before, roots, parentId);
+  if (!transforms.ok) return transforms;
+
+  const pages: MutablePage[] = before.pages.map((page) => ({
+    id: page.id,
+    name: page.name,
+    rootNodeIds: page.rootNodeIds.filter((nodeId) => !movedIds.has(nodeId)),
+  }));
+  const nodes = new Map<NodeId, SceneNode>(before.nodes.map((node) => [node.id, cloneNode(node)]));
+  for (const node of nodes.values()) {
+    if (!isContainer(node)) continue;
+    nodes.set(
+      node.id,
+      withChildIds(
+        node,
+        node.childIds.filter((childId) => !movedIds.has(childId)),
+      ),
+    );
+  }
+
+  let destinationChildren: NodeId[];
+  if (parentId === null) {
+    destinationChildren = pages[pageIndex(before, pageId.value)]!.rootNodeIds;
+  } else {
+    const parent = nodes.get(parentId)!;
+    if (!isContainer(parent)) return failure('node.destination-not-container', '/parentId');
+    destinationChildren = [...parent.childIds];
+  }
+  const index = commandIndex(command.index, destinationChildren.length);
+  if (!index.ok) return index;
+  destinationChildren.splice(index.value, 0, ...roots.map((root) => root.node.id));
+  if (parentId !== null) {
+    const parent = nodes.get(parentId)!;
+    if (!isContainer(parent)) return failure('node.destination-not-container', '/parentId');
+    nodes.set(parentId, withChildIds(parent, destinationChildren));
+  }
+
+  for (const root of roots) {
+    const moved = withParent(nodes.get(root.node.id)!, parentId);
+    const transform = transforms.value.get(root.node.id);
+    nodes.set(
+      root.node.id,
+      transform === undefined ? moved : ({ ...moved, transform: [...transform] } as SceneNode),
+    );
+  }
+  pruneEmptyGroups(pages, nodes);
+
+  const candidate = commitCandidate(before, {
+    name: before.name,
+    pageOrder: pages.map((page) => page.id),
+    activePageId: before.activePageId,
+    pages,
+    nodes: before.nodes.flatMap((node) => {
+      const candidateNode = nodes.get(node.id);
+      return candidateNode === undefined ? [] : [candidateNode];
+    }),
+  });
+  if (!candidate.ok) return candidate;
+  if (contentMatchesDocument(candidate.value, before)) return failure('command.no-change', '/');
+  return candidate;
 }

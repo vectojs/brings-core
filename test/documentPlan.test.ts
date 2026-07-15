@@ -6,6 +6,7 @@ import {
   type DocumentContent,
 } from '../src';
 import { planCommand } from '../src/document/plan';
+import { pageMatrixForNode } from '../src/geometry/matrix';
 import type { FrameNodeInput } from '../src/document/types';
 
 const ids = {
@@ -522,6 +523,155 @@ test('rejects invalid, unsupported, locked, duplicate, and no-change property pa
   });
   expect(unlocked.ok).toBe(true);
   if (unlocked.ok) expect(unlocked.value.nodes[1]).toMatchObject({ locked: false });
+  expect(JSON.stringify(before)).toBe(source);
+});
+
+test('moves canonical roots and reparents nodes while preserving page-space matrices', () => {
+  const before = propertyDocument();
+  const reorder = unwrap(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.sibling, ids.frame],
+      pageId: ids.page1,
+      parentId: null,
+      index: 1,
+    }),
+  );
+  expect(reorder.pages[0]?.rootNodeIds.map(String)).toEqual([ids.group, ids.frame, ids.sibling]);
+
+  const beforeTextPage = unwrap(pageMatrixForNode(before, ids.sibling, '/nodeIds/0'));
+  const movedText = unwrap(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.sibling],
+      pageId: ids.page1,
+      parentId: ids.frame,
+      index: 1,
+    }),
+  );
+  const textDocument = documentFromContent(before, movedText, 1);
+  expect(pageMatrixForNode(textDocument, ids.sibling, '/nodeIds/0')).toEqual({
+    ok: true,
+    value: beforeTextPage,
+  });
+  expect(textDocument.nodes.find((node) => node.id === ids.frame)).toMatchObject({
+    childIds: [ids.rectangle, ids.sibling],
+  });
+  expect(textDocument.nodes.find((node) => node.id === ids.sibling)).toMatchObject({
+    parentId: ids.frame,
+    transform: [1, 0, 0, 1, 70, 340],
+  });
+
+  const beforeEllipsePage = unwrap(pageMatrixForNode(before, ids.child, '/nodeIds/0'));
+  const movedEllipse = unwrap(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.child],
+      pageId: ids.page1,
+      parentId: ids.frame,
+      index: 1,
+    }),
+  );
+  const ellipseDocument = documentFromContent(before, movedEllipse, 1);
+  expect(pageMatrixForNode(ellipseDocument, ids.child, '/nodeIds/0')).toEqual({
+    ok: true,
+    value: beforeEllipsePage,
+  });
+  expect(ellipseDocument.pages[0]?.rootNodeIds.map(String)).toEqual([ids.frame, ids.sibling]);
+  expect(ellipseDocument.nodes.find((node) => node.id === ids.frame)).toMatchObject({
+    childIds: [ids.rectangle, ids.child],
+  });
+  expect(ellipseDocument.nodes.some((node) => node.id === ids.group)).toBe(false);
+});
+
+test('rejects invalid, cyclic, locked, cross-page, and no-change layer moves atomically', () => {
+  const before = propertyDocument();
+  const source = JSON.stringify(before);
+
+  expect(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.frame, ids.frame],
+      pageId: ids.page1,
+      parentId: null,
+      index: 0,
+    }),
+  ).toEqual({ ok: false, error: { code: 'id.duplicate', path: '/nodeIds/1' } });
+  expect(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.rectangle, ids.frame],
+      pageId: ids.page1,
+      parentId: null,
+      index: 0,
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.hierarchy-overlap', path: '/nodeIds/1' } });
+  expect(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.frame],
+      pageId: ids.page1,
+      parentId: ids.frame,
+      index: 0,
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.destination-cycle', path: '/parentId' } });
+  expect(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.sibling],
+      pageId: ids.page1,
+      parentId: ids.sibling,
+      index: 0,
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'node.destination-not-container', path: '/parentId' },
+  });
+  expect(
+    planCommand(before, {
+      kind: 'move-nodes',
+      nodeIds: [ids.frame],
+      pageId: ids.page1,
+      parentId: null,
+      index: 0,
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.no-change', path: '/' } });
+
+  const locked = unwrap(
+    planCommand(before, {
+      kind: 'set-node-properties',
+      nodeIds: [ids.frame],
+      patch: { locked: true },
+    }),
+  );
+  const lockedDocument = documentFromContent(before, locked, 1);
+  expect(
+    planCommand(lockedDocument, {
+      kind: 'move-nodes',
+      nodeIds: [ids.sibling],
+      pageId: ids.page1,
+      parentId: ids.frame,
+      index: 1,
+    }),
+  ).toEqual({ ok: false, error: { code: 'node.locked', path: '/nodes/0/locked' } });
+
+  const otherPage = unwrap(
+    planCommand(before, { kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }),
+  );
+  const withSecondPage = documentFromContent(before, otherPage, 1);
+  const activeFirstPage = unwrap(
+    planCommand(withSecondPage, { kind: 'activate-page', pageId: ids.page1 }),
+  );
+  const multiPage = documentFromContent(withSecondPage, activeFirstPage, 2);
+  expect(
+    planCommand(multiPage, {
+      kind: 'move-nodes',
+      nodeIds: [ids.sibling],
+      pageId: ids.page2,
+      parentId: null,
+      index: 0,
+    }),
+  ).toEqual({ ok: false, error: { code: 'command.destination-page-mismatch', path: '/pageId' } });
   expect(JSON.stringify(before)).toBe(source);
 });
 

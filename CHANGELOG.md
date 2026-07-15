@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- 5c62516: Add the public `create-text` document command for validated, undoable Text node creation.
+
 ## 0.11.0
 
 ### Minor Changes

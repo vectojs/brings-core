@@ -22,6 +22,7 @@ const ids = {
   sibling: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   emptyGroup: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   createdText: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  ellipse: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -230,6 +231,30 @@ function createRectangleCommand(parentId: string = ids.frame) {
   };
 }
 
+function createEllipseCommand(parentId: string = ids.frame) {
+  return {
+    kind: 'create-ellipse' as const,
+    pageId: ids.page1,
+    parentId,
+    index: 0,
+    ellipse: {
+      id: ids.ellipse,
+      name: 'Ellipse',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 24, 28],
+      width: 120,
+      height: 120,
+      fill: { type: 'solid' as const, r: 0.18, g: 0.45, b: 0.95, a: 1 },
+      stroke: {
+        paint: { type: 'solid' as const, r: 0.08, g: 0.12, b: 0.2, a: 1 },
+        width: 2,
+      },
+    },
+  };
+}
+
 function createTextCommand() {
   return {
     kind: 'create-text' as const,
@@ -271,6 +296,39 @@ test('creates an empty Frame then a nested Rectangle through intention-level com
         { id: ids.rectangle, type: 'rectangle', parentId: ids.frame },
       ],
     },
+  });
+});
+
+test('creates a detached nested Ellipse through an intention-level command', () => {
+  const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
+  const afterFrame = documentFromContent(initialDocument(), frame, 1);
+  const command = createEllipseCommand();
+  const result = planCommand(afterFrame, command as never);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      pages: [{ rootNodeIds: [ids.frame] }],
+      nodes: [
+        { id: ids.frame, type: 'frame', childIds: [ids.ellipse] },
+        {
+          id: ids.ellipse,
+          type: 'ellipse',
+          parentId: ids.frame,
+          width: 120,
+          height: 120,
+        },
+      ],
+    },
+  });
+  command.ellipse.transform[4] = 999;
+  command.ellipse.fill.r = 1;
+  command.ellipse.stroke.paint.r = 1;
+  if (!result.ok) return;
+  expect(result.value.nodes[1]).toMatchObject({
+    transform: [1, 0, 0, 1, 24, 28],
+    fill: { r: 0.18 },
+    stroke: { paint: { r: 0.08 } },
   });
 });
 

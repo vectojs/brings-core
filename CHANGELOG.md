@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- c4ac386: Add a public `create-ellipse` document command with detached input ownership, schema validation, and atomic undo/redo history.
+
 ## 0.13.0
 
 ### Minor Changes

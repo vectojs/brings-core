@@ -29,6 +29,7 @@ export type {
   BringsDocument,
   BringsDocumentInput,
   BringsError,
+  CreateEllipseInput,
   CreateFrameInput,
   CreateRectangleInput,
   CreateTextInput,

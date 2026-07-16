@@ -247,6 +247,31 @@ function createRectangle(
   });
 }
 
+function createEllipse(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'create-ellipse' }>,
+): Result<DocumentContent> {
+  const ellipse = {
+    ...command.ellipse,
+    type: 'ellipse' as const,
+    parentId: null,
+    transform: [...command.ellipse.transform],
+    fill: command.ellipse.fill === null ? null : { ...command.ellipse.fill },
+    stroke:
+      command.ellipse.stroke === null
+        ? null
+        : { paint: { ...command.ellipse.stroke.paint }, width: command.ellipse.stroke.width },
+  };
+  return insertSubtree(before, {
+    kind: 'insert-subtree',
+    pageId: command.pageId,
+    parentId: command.parentId,
+    index: command.index,
+    rootId: command.ellipse.id,
+    nodes: [ellipse],
+  });
+}
+
 function createText(
   before: BringsDocument,
   command: Extract<DocumentCommandInput, { kind: 'create-text' }>,
@@ -489,6 +514,8 @@ export function planCommand(
       return createFrame(before, command);
     case 'create-rectangle':
       return createRectangle(before, command);
+    case 'create-ellipse':
+      return createEllipse(before, command);
     case 'create-text':
       return createText(before, command);
     case 'insert-subtree':

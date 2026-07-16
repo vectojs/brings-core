@@ -12,6 +12,7 @@ const ids = {
   secondRectangle: '77777777-7777-4777-8777-777777777777',
   group: '88888888-8888-4888-8888-888888888888',
   text: '99999999-9999-4999-8999-999999999999',
+  ellipse: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -258,6 +259,50 @@ test('records Text creation as one undoable intention', () => {
   expect(store.snapshot().document.nodes).toEqual([]);
   expect(store.redo().ok).toBe(true);
   expect(store.snapshot().document.nodes).toMatchObject([{ content: 'Editable' }]);
+});
+
+test('records Ellipse creation as one undoable intention', () => {
+  const store = createStore();
+  expect(store.execute(insertFrame).ok).toBe(true);
+  const created = store.execute({
+    kind: 'create-ellipse',
+    pageId: ids.page1,
+    parentId: ids.frame,
+    index: 1,
+    ellipse: {
+      id: ids.ellipse,
+      name: 'Ellipse',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 150, 20],
+      width: 120,
+      height: 120,
+      fill: { type: 'solid', r: 0.18, g: 0.45, b: 0.95, a: 1 },
+      stroke: null,
+    },
+  } as never);
+
+  expect(created.ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    document: {
+      revision: 2,
+      nodes: [
+        { childIds: [ids.rectangle, ids.ellipse] },
+        { id: ids.rectangle },
+        { id: ids.ellipse },
+      ],
+    },
+    undoDepth: 2,
+  });
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot().document.nodes.some((node) => node.id === ids.ellipse)).toBe(false);
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot().document.nodes).toMatchObject([
+    {},
+    {},
+    { id: ids.ellipse, type: 'ellipse' },
+  ]);
 });
 
 test('normalizes ephemeral selection without changing durable state or history', () => {

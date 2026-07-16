@@ -14,7 +14,7 @@ sessions.
 The current Core provides strict schema-v1 document validation and a
 transactional in-memory store. It supports Frame, Group, Rectangle, Ellipse,
 and Text document values; page creation, renaming, reordering, deletion, and
-activation; intention-level Frame and Rectangle creation; detached-subtree
+activation; intention-level Frame, Rectangle, Ellipse, and Text creation; detached-subtree
 insertion and atomic multi-subtree deletion; normalized ephemeral selection;
 renderer-free point and rectangle intersection; reusable immutable page-hit
 indexes; page-space affine transform deltas; and atomic undo/redo with monotonic

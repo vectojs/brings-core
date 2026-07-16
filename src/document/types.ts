@@ -266,6 +266,9 @@ export type CreateFrameInput = Omit<FrameNodeInput, 'type' | 'parentId' | 'child
 /** Explicit mutable fields for the first Rectangle creation command. */
 export type CreateRectangleInput = Omit<RectangleNodeInput, 'type' | 'parentId'>;
 
+/** Explicit mutable fields for one Ellipse creation command. */
+export type CreateEllipseInput = Omit<EllipseNodeInput, 'type' | 'parentId'>;
+
 /** Explicit mutable fields for one Text creation command. */
 export type CreateTextInput = Omit<TextNodeInput, 'type' | 'parentId'>;
 
@@ -346,6 +349,13 @@ export type DocumentCommandInput =
       parentId: string | null;
       index: number;
       rectangle: CreateRectangleInput;
+    }>
+  | Readonly<{
+      kind: 'create-ellipse';
+      pageId: string;
+      parentId: string | null;
+      index: number;
+      ellipse: CreateEllipseInput;
     }>
   | Readonly<{
       kind: 'create-text';

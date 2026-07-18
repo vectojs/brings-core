@@ -144,6 +144,8 @@ function selectablePolygon(
     }
     case 'text':
       return transformedRectangle(pageMatrix, 0, 0, node.width, node.height, path);
+    case 'path':
+      return failure('path.geometry-unsupported', path);
   }
 }
 

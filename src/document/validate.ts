@@ -11,6 +11,11 @@ import type {
   NodeId,
   Page,
   PageId,
+  PathNetwork,
+  PathNode,
+  PathPoint,
+  PathSegment,
+  PathVertex,
   Radii,
   RectangleNode,
   Result,
@@ -32,6 +37,8 @@ const MAX_FONT_FAMILIES = 16;
 const MAX_FONT_FAMILY_SCALARS = 256;
 const MAX_FONT_MEASURE = 100_000;
 const MIN_FONT_MEASURE = 0.1;
+const MAX_PATH_VERTICES = 10_000;
+const MAX_PATH_SEGMENTS = 20_000;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -248,6 +255,150 @@ function readOptionalStroke(value: unknown, path: string): Result<Stroke | null>
   return success({ paint: paint.value, width: width.value });
 }
 
+function readPathPoint(value: unknown, path: string): Result<PathPoint> {
+  const record = readRecord(value, path);
+  if (!record.ok) return record;
+  const exact = readExactKeys(record.value, ['x', 'y'], path);
+  if (!exact.ok) return exact;
+  const x = readFiniteRange(record.value.x, pathAt(path, 'x'), -MAX_DIMENSION, MAX_DIMENSION);
+  if (!x.ok) return x;
+  const y = readFiniteRange(record.value.y, pathAt(path, 'y'), -MAX_DIMENSION, MAX_DIMENSION);
+  if (!y.ok) return y;
+  return success({ x: x.value, y: y.value });
+}
+
+type ParsedPathNetwork = Readonly<{
+  network: PathNetwork;
+  allComponentsClosed: boolean;
+}>;
+
+function readPathNetwork(value: unknown, path: string): Result<ParsedPathNetwork> {
+  const record = readRecord(value, path);
+  if (!record.ok) return record;
+  const exact = readExactKeys(record.value, ['vertices', 'segments'], path);
+  if (!exact.ok) return exact;
+
+  const verticesPath = pathAt(path, 'vertices');
+  if (
+    !Array.isArray(record.value.vertices) ||
+    record.value.vertices.length < 2 ||
+    record.value.vertices.length > MAX_PATH_VERTICES
+  ) {
+    return failure('path.vertices-limit', verticesPath);
+  }
+  const vertices: PathVertex[] = [];
+  const vertexIndices = new Map<string, number>();
+  for (let index = 0; index < record.value.vertices.length; index += 1) {
+    const vertexPath = pathAt(verticesPath, index);
+    const vertexRecord = readRecord(record.value.vertices[index], vertexPath);
+    if (!vertexRecord.ok) return vertexRecord;
+    const vertexExact = readExactKeys(vertexRecord.value, ['id', 'position'], vertexPath);
+    if (!vertexExact.ok) return vertexExact;
+    const id = readUuid(vertexRecord.value.id, pathAt(vertexPath, 'id'));
+    if (!id.ok) return id;
+    if (vertexIndices.has(id.value)) {
+      return failure('path.vertex-duplicate', pathAt(vertexPath, 'id'));
+    }
+    const position = readPathPoint(vertexRecord.value.position, pathAt(vertexPath, 'position'));
+    if (!position.ok) return position;
+    vertexIndices.set(id.value, index);
+    vertices.push({ id: id.value, position: position.value });
+  }
+
+  const segmentsPath = pathAt(path, 'segments');
+  if (
+    !Array.isArray(record.value.segments) ||
+    record.value.segments.length < 1 ||
+    record.value.segments.length > MAX_PATH_SEGMENTS
+  ) {
+    return failure('path.segments-limit', segmentsPath);
+  }
+  const segments: PathSegment[] = [];
+  const segmentIds = new Set<string>();
+  const edgeKeys = new Set<string>();
+  const degrees = new Map<string, number>(vertices.map((vertex) => [vertex.id, 0]));
+  for (let index = 0; index < record.value.segments.length; index += 1) {
+    const segmentPath = pathAt(segmentsPath, index);
+    const segmentRecord = readRecord(record.value.segments[index], segmentPath);
+    if (!segmentRecord.ok) return segmentRecord;
+    const segmentExact = readExactKeys(
+      segmentRecord.value,
+      ['id', 'startVertexId', 'endVertexId', 'startControl', 'endControl'],
+      segmentPath,
+    );
+    if (!segmentExact.ok) return segmentExact;
+    const id = readUuid(segmentRecord.value.id, pathAt(segmentPath, 'id'));
+    if (!id.ok) return id;
+    if (segmentIds.has(id.value)) {
+      return failure('path.segment-duplicate', pathAt(segmentPath, 'id'));
+    }
+    const startVertexId = readUuid(
+      segmentRecord.value.startVertexId,
+      pathAt(segmentPath, 'startVertexId'),
+    );
+    if (!startVertexId.ok) return startVertexId;
+    if (!vertexIndices.has(startVertexId.value)) {
+      return failure('path.vertex-missing', pathAt(segmentPath, 'startVertexId'));
+    }
+    const endVertexId = readUuid(
+      segmentRecord.value.endVertexId,
+      pathAt(segmentPath, 'endVertexId'),
+    );
+    if (!endVertexId.ok) return endVertexId;
+    if (!vertexIndices.has(endVertexId.value)) {
+      return failure('path.vertex-missing', pathAt(segmentPath, 'endVertexId'));
+    }
+    if (startVertexId.value === endVertexId.value) {
+      return failure('path.self-edge', pathAt(segmentPath, 'endVertexId'));
+    }
+    const edgeKey =
+      startVertexId.value < endVertexId.value
+        ? `${startVertexId.value}:${endVertexId.value}`
+        : `${endVertexId.value}:${startVertexId.value}`;
+    if (edgeKeys.has(edgeKey)) return failure('path.edge-duplicate', segmentPath);
+    const startControl = readPathPoint(
+      segmentRecord.value.startControl,
+      pathAt(segmentPath, 'startControl'),
+    );
+    if (!startControl.ok) return startControl;
+    const endControl = readPathPoint(
+      segmentRecord.value.endControl,
+      pathAt(segmentPath, 'endControl'),
+    );
+    if (!endControl.ok) return endControl;
+
+    const startDegree = (degrees.get(startVertexId.value) ?? 0) + 1;
+    const endDegree = (degrees.get(endVertexId.value) ?? 0) + 1;
+    if (startDegree > 2 || endDegree > 2) {
+      return failure('path.branching-unsupported', segmentPath);
+    }
+    degrees.set(startVertexId.value, startDegree);
+    degrees.set(endVertexId.value, endDegree);
+    segmentIds.add(id.value);
+    edgeKeys.add(edgeKey);
+    segments.push({
+      id: id.value,
+      startVertexId: startVertexId.value,
+      endVertexId: endVertexId.value,
+      startControl: startControl.value,
+      endControl: endControl.value,
+    });
+  }
+
+  for (let index = 0; index < vertices.length; index += 1) {
+    if (degrees.get(vertices[index]!.id) === 0) {
+      return failure('path.component-invalid', pathAt(verticesPath, index));
+    }
+  }
+  return success({
+    network: {
+      vertices: vertices as [PathVertex, PathVertex, ...PathVertex[]],
+      segments: segments as [PathSegment, ...PathSegment[]],
+    },
+    allComponentsClosed: vertices.every((vertex) => degrees.get(vertex.id) === 2),
+  });
+}
+
 function readCommonNode(record: UnknownRecord, path: string): Result<ParsedCommonNode> {
   const id = readUuid(record.id, pathAt(path, 'id'));
   if (!id.ok) return id;
@@ -345,12 +496,16 @@ function readNode(
     rawType !== 'group' &&
     rawType !== 'rectangle' &&
     rawType !== 'ellipse' &&
+    rawType !== 'path' &&
     rawType !== 'text'
   ) {
     return failure('node.type', pathAt(path, 'type'));
   }
   if (
-    (rawType === 'rectangle' || rawType === 'ellipse' || rawType === 'text') &&
+    (rawType === 'rectangle' ||
+      rawType === 'ellipse' ||
+      rawType === 'path' ||
+      rawType === 'text') &&
     hasOwn(record.value, 'childIds')
   ) {
     return failure('node.leaf-children', pathAt(path, 'childIds'));
@@ -371,6 +526,7 @@ function readNode(
     group: ['childIds'],
     rectangle: ['width', 'height', 'cornerRadii', 'fill', 'stroke'],
     ellipse: ['width', 'height', 'fill', 'stroke'],
+    path: ['network', 'fillRule', 'fill', 'stroke'],
     text: [
       'content',
       'fontFamilies',
@@ -475,6 +631,29 @@ function readNode(
         type: 'ellipse',
         width: width.value,
         height: height.value,
+        fill: fill.value,
+        stroke: stroke.value,
+      };
+      return success(node);
+    }
+    case 'path': {
+      const network = readPathNetwork(record.value.network, pathAt(path, 'network'));
+      if (!network.ok) return network;
+      if (record.value.fillRule !== 'nonzero' && record.value.fillRule !== 'evenodd') {
+        return failure('path.fill-rule', pathAt(path, 'fillRule'));
+      }
+      const fill = readOptionalPaint(record.value.fill, pathAt(path, 'fill'));
+      if (!fill.ok) return fill;
+      if (fill.value !== null && !network.value.allComponentsClosed) {
+        return failure('path.fill-open', pathAt(path, 'fill'));
+      }
+      const stroke = readOptionalStroke(record.value.stroke, pathAt(path, 'stroke'));
+      if (!stroke.ok) return stroke;
+      const node: PathNode = {
+        ...common.value,
+        type: 'path',
+        network: network.value.network,
+        fillRule: record.value.fillRule,
         fill: fill.value,
         stroke: stroke.value,
       };

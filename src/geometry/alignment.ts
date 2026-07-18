@@ -167,6 +167,8 @@ function nodeModelBounds(
       : success(bounds);
   }
 
+  if (node.type === 'path') return failure('path.geometry-unsupported', path);
+
   const polygon = transformPolygon(
     resolvedPageMatrix.value,
     rectanglePolygon(0, 0, node.width, node.height),

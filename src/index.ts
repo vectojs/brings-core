@@ -5,6 +5,14 @@ export { createDocumentStore, openDocumentStore } from './document/store';
 export { hitTestPage, intersectPageRect, type PagePoint, type PageRect } from './geometry/hit';
 export { createPageHitIndex, type PageHitIndex } from './geometry/pageHitIndex';
 export {
+  flattenPathNetwork,
+  orderPathNetwork,
+  pathNetworkBounds,
+  type FlattenedPathComponent,
+  type OrderedPathComponent,
+  type OrderedPathCubic,
+} from './geometry/path';
+export {
   ALIGNMENT_SNAP_THRESHOLD,
   prepareSelectionAlignment,
   type AlignmentAnchor,

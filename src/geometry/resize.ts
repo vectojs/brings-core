@@ -11,6 +11,7 @@ import type {
 } from '../document/types';
 import { polygonBounds, rectanglePolygon, transformPolygon } from './intersection';
 import { multiplyMatrices, pageMatrixForNode } from './matrix';
+import { pathNetworkBounds } from './path';
 
 /** One of the eight axis-aligned handles around a prepared selection. */
 export type ResizeHandle =
@@ -177,7 +178,9 @@ function nodeModelBounds(
       : success(bounds);
   }
 
-  if (node.type === 'path') return failure('path.geometry-unsupported', path);
+  if (node.type === 'path') {
+    return pathNetworkBounds(node.network, resolvedPageMatrix.value, path);
+  }
 
   const polygon = transformPolygon(
     resolvedPageMatrix.value,

@@ -12,6 +12,12 @@ import {
 } from './intersection';
 import type { PageRect } from './hit';
 import { invertMatrix } from './matrix';
+import {
+  flattenPathNetwork,
+  flattenedPathIntersectsPolygon,
+  pathNetworkBounds,
+  type FlattenedPathComponent,
+} from './path';
 
 export type NormalizedPageRect = Readonly<{
   minX: number;
@@ -20,7 +26,7 @@ export type NormalizedPageRect = Readonly<{
   maxY: number;
 }>;
 
-type SelectableNode = Exclude<SceneNode, { type: 'group' }>;
+type SelectableNode = Exclude<SceneNode, { type: 'group' } | { type: 'path' }>;
 
 type PreparedPolygonSilhouette = Readonly<{
   kind: 'polygon';
@@ -35,12 +41,22 @@ type PreparedEllipseSilhouette = Readonly<{
   localStrokeExpansion: number;
 }>;
 
+type PreparedPathSilhouette = Readonly<{
+  kind: 'path';
+  pageMatrix: Matrix;
+  components: readonly FlattenedPathComponent[];
+  fillRule: 'nonzero' | 'evenodd';
+  hasFill: boolean;
+  hasStroke: boolean;
+  strokeExpansion: number;
+}>;
+
 export type PreparedSelectionCandidate = Readonly<{
   id: NodeId;
   nodeIndex: number;
   pageBounds: Bounds;
   path: string;
-  silhouette: PreparedPolygonSilhouette | PreparedEllipseSilhouette;
+  silhouette: PreparedPolygonSilhouette | PreparedEllipseSilhouette | PreparedPathSilhouette;
 }>;
 
 function failure(code: string, path: string): Result<never> {
@@ -144,8 +160,6 @@ function selectablePolygon(
     }
     case 'text':
       return transformedRectangle(pageMatrix, 0, 0, node.width, node.height, path);
-    case 'path':
-      return failure('path.geometry-unsupported', path);
   }
 }
 
@@ -157,6 +171,44 @@ export function prepareSelectionCandidate(
   if (node.type === 'group') return success(null);
 
   const path = nodeTransformPath(nodeIndex);
+  if (node.type === 'path') {
+    const rawBounds = pathNetworkBounds(node.network, pageMatrix, path);
+    if (!rawBounds.ok) return rawBounds;
+    const strokeExpansion = localStrokeExpansion(node.stroke?.width ?? null);
+    const expansionX = strokeExpansion * Math.hypot(pageMatrix[0], pageMatrix[2]);
+    const expansionY = strokeExpansion * Math.hypot(pageMatrix[1], pageMatrix[3]);
+    if (!Number.isFinite(expansionX) || !Number.isFinite(expansionY)) {
+      return failure('geometry.computation-overflow', path);
+    }
+    const scale = Math.max(
+      Math.hypot(pageMatrix[0], pageMatrix[1]),
+      Math.hypot(pageMatrix[2], pageMatrix[3]),
+    );
+    if (!Number.isFinite(scale) || scale <= 0)
+      return failure('geometry.computation-overflow', path);
+    const flattened = flattenPathNetwork(node.network, 0.25 / scale, path);
+    if (!flattened.ok) return flattened;
+    const expandedBounds = {
+      minX: rawBounds.value.minX - expansionX,
+      minY: rawBounds.value.minY - expansionY,
+      maxX: rawBounds.value.maxX + expansionX,
+      maxY: rawBounds.value.maxY + expansionY,
+    };
+    if (Object.values(expandedBounds).some((value) => !Number.isFinite(value))) {
+      return failure('geometry.computation-overflow', path);
+    }
+    const pageBounds = freezeBounds(expandedBounds);
+    const silhouette: PreparedPathSilhouette = Object.freeze({
+      kind: 'path',
+      pageMatrix: freezeMatrix(pageMatrix),
+      components: flattened.value,
+      fillRule: node.fillRule,
+      hasFill: node.fill !== null,
+      hasStroke: node.stroke !== null,
+      strokeExpansion,
+    });
+    return success(Object.freeze({ id: node.id, nodeIndex, pageBounds, path, silhouette }));
+  }
   const silhouette = selectablePolygon(node, pageMatrix, path);
   if (!silhouette.ok) return silhouette;
   const pageBounds = polygonBounds(silhouette.value);
@@ -195,6 +247,27 @@ export function preparedCandidateIntersects(
 
   if (candidate.silhouette.kind === 'polygon') {
     return polygonsIntersect(candidate.silhouette.pagePolygon, query, candidate.path);
+  }
+
+  if (candidate.silhouette.kind === 'path') {
+    const inverse = invertMatrix(candidate.silhouette.pageMatrix, candidate.path);
+    if (!inverse.ok) {
+      if (inverse.error.code === 'matrix.singular') return success(false);
+      return failure('geometry.computation-overflow', candidate.path);
+    }
+    const localQuery = transformPolygon(inverse.value, query, candidate.path);
+    if (!localQuery.ok) return localQuery;
+    return flattenedPathIntersectsPolygon(
+      candidate.silhouette.components,
+      localQuery.value,
+      {
+        fillRule: candidate.silhouette.fillRule,
+        hasFill: candidate.silhouette.hasFill,
+        hasStroke: candidate.silhouette.hasStroke,
+        strokeExpansion: candidate.silhouette.strokeExpansion,
+      },
+      candidate.path,
+    );
   }
 
   const inverse = invertMatrix(candidate.silhouette.pageMatrix, candidate.path);

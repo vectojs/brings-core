@@ -13,9 +13,10 @@ sessions.
 
 The current Core provides strict schema-v1 document validation and a
 transactional in-memory store. It supports Frame, Group, Rectangle, Ellipse,
-and Text document values; page creation, renaming, reordering, deletion, and
-activation; intention-level Frame, Rectangle, Ellipse, and Text creation; detached-subtree
-insertion and atomic multi-subtree deletion; normalized ephemeral selection;
+Path, and Text document values; page creation, renaming, reordering, deletion,
+and activation; intention-level Frame, Rectangle, Ellipse, Path, and Text
+creation; detached-subtree insertion and atomic multi-subtree deletion;
+normalized ephemeral selection;
 renderer-free point and rectangle intersection; reusable immutable page-hit
 indexes; page-space affine transform deltas; and atomic undo/redo with monotonic
 revisions. It also provides atomic compatible property patches, deterministic
@@ -109,10 +110,11 @@ console.log(selectedSnapshot.selection.nodeIds); // [rectangleId]
 
 `intersectPageRect` returns eligible node IDs in stable back-to-front order;
 `hitTestPage` and `PageHitIndex.hitTest` return front-to-back point hits. Both
-paths use exact affine polygon/ellipse silhouettes, centered strokes, and
-unexpanded ancestor Frame clipping. Frame, Rectangle, Ellipse, and Text remain
-selectable even when their background or fill is transparent; Group contributes
-hierarchy and transforms but has no selection silhouette.
+paths use exact affine polygon/ellipse silhouettes, adaptive cubic Path
+geometry, centered strokes, and unexpanded ancestor Frame clipping. Frame,
+Rectangle, Ellipse, Path, and Text remain selectable even when their background
+or fill is transparent; Group contributes hierarchy and transforms but has no
+selection silhouette.
 
 Create a `PageHitIndex` once for a detached immutable document snapshot when an
 interaction will issue repeated point or marquee queries. Rebuild the index after
@@ -142,6 +144,89 @@ unwrap(
 Core owns document and hierarchy math; a Website gesture previews transiently
 and commits only its final selection or delta. The Core remains independent from
 DOM, PointerEvent, Canvas, and VectoJS runtime types.
+
+## Path networks
+
+`PathNode` stores a renderer-independent graph of stable UUID vertices and
+segments. Each segment is a cubic Bezier whose `startControl` and `endControl`
+are offsets from its endpoint vertices; zero offsets therefore represent a
+straight segment without a second line primitive. A network may contain
+multiple disjoint simple chains or cycles. This release deliberately rejects
+branches and isolated vertices, and permits a fill only when every component is
+closed. Those constraints keep traversal, editing, hit testing, and interchange
+deterministic while preserving a compatible seam for future vector-network
+branch support.
+
+```ts
+unwrap(
+  store.execute({
+    kind: 'create-path',
+    pageId,
+    parentId: null,
+    index: 1,
+    path: {
+      id: '44444444-4444-4444-8444-444444444444',
+      name: 'Triangle',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 280, 30],
+      network: {
+        vertices: [
+          {
+            id: '55555555-5555-4555-8555-555555555555',
+            position: { x: 60, y: 0 },
+          },
+          {
+            id: '66666666-6666-4666-8666-666666666666',
+            position: { x: 120, y: 100 },
+          },
+          {
+            id: '77777777-7777-4777-8777-777777777777',
+            position: { x: 0, y: 100 },
+          },
+        ],
+        segments: [
+          {
+            id: '88888888-8888-4888-8888-888888888888',
+            startVertexId: '55555555-5555-4555-8555-555555555555',
+            endVertexId: '66666666-6666-4666-8666-666666666666',
+            startControl: { x: 0, y: 0 },
+            endControl: { x: 0, y: 0 },
+          },
+          {
+            id: '99999999-9999-4999-8999-999999999999',
+            startVertexId: '66666666-6666-4666-8666-666666666666',
+            endVertexId: '77777777-7777-4777-8777-777777777777',
+            startControl: { x: 0, y: 0 },
+            endControl: { x: 0, y: 0 },
+          },
+          {
+            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            startVertexId: '77777777-7777-4777-8777-777777777777',
+            endVertexId: '55555555-5555-4555-8555-555555555555',
+            startControl: { x: 0, y: 0 },
+            endControl: { x: 0, y: 0 },
+          },
+        ],
+      },
+      fillRule: 'nonzero',
+      fill: { type: 'solid', r: 0.18, g: 0.45, b: 1, a: 1 },
+      stroke: null,
+    },
+  }),
+);
+```
+
+Use `set-path-network` to replace one active, visible, unlocked Path network as
+one undoable edit. Both commands validate and deep-copy caller input before
+committing. Public `orderPathNetwork`, `pathNetworkBounds`, and
+`flattenPathNetwork` helpers expose detached, frozen geometry for renderers and
+gesture previews. Bounds use cubic derivative extrema; hit testing uses adaptive
+De Casteljau flattening for compound nonzero or even-odd fills and centered
+strokes. Stable `path.*` errors identify duplicate or missing graph members,
+unsupported branching, invalid components, open fills, size caps, and geometry
+complexity at a JSON Pointer path.
 
 ## Prepared resize plans
 
@@ -178,9 +263,9 @@ scaling; callers normally map Alt and Shift to those semantic modifiers. Crossin
 the anchor produces a signed scale. Singular and computed-overflow proposals are
 rejected without changing the prepared plan or caller-owned input.
 
-The package does not yet include rotation editing, codec parsing or
-serialization, persistence, or browser adapters. Those remain independently
-verified slices.
+The package does not yet include rotation editing, post-creation Path anchor or
+handle editing, codec parsing or serialization, persistence, or browser
+adapters. Those remain independently verified slices.
 
 ## Layer and property commands
 

@@ -348,6 +348,9 @@ export type CreateRectangleInput = Omit<RectangleNodeInput, 'type' | 'parentId'>
 /** Explicit mutable fields for one Ellipse creation command. */
 export type CreateEllipseInput = Omit<EllipseNodeInput, 'type' | 'parentId'>;
 
+/** Explicit mutable fields for one Path creation command. */
+export type CreatePathInput = Omit<PathNodeInput, 'type' | 'parentId'>;
+
 /** Explicit mutable fields for one Text creation command. */
 export type CreateTextInput = Omit<TextNodeInput, 'type' | 'parentId'>;
 
@@ -408,6 +411,22 @@ export type UngroupNodeCommand = Readonly<{
   nodeId: string;
 }>;
 
+/** Create one validated Path leaf in the active page. */
+export type CreatePathCommand = Readonly<{
+  kind: 'create-path';
+  pageId: string;
+  parentId: string | null;
+  index: number;
+  path: CreatePathInput;
+}>;
+
+/** Atomically replace the graph owned by one active, editable Path. */
+export type SetPathNetworkCommand = Readonly<{
+  kind: 'set-path-network';
+  nodeId: string;
+  network: PathNetworkInput;
+}>;
+
 /** The initial narrow command vocabulary for the document tracer. */
 export type DocumentCommandInput =
   | Readonly<{ kind: 'create-page'; id: string; name: string; index: number }>
@@ -436,6 +455,7 @@ export type DocumentCommandInput =
       index: number;
       ellipse: CreateEllipseInput;
     }>
+  | CreatePathCommand
   | Readonly<{
       kind: 'create-text';
       pageId: string;
@@ -457,4 +477,5 @@ export type DocumentCommandInput =
   | SetNodePropertiesCommand
   | MoveNodesCommand
   | GroupNodesCommand
-  | UngroupNodeCommand;
+  | UngroupNodeCommand
+  | SetPathNetworkCommand;

@@ -23,6 +23,13 @@ const ids = {
   emptyGroup: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   createdText: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   ellipse: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  path: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  vertexA: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+  vertexB: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+  vertexC: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
+  segmentA: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+  segmentB: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
+  segmentC: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb3',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -282,6 +289,60 @@ function createTextCommand() {
   };
 }
 
+function pathNetwork(offset = 0) {
+  return {
+    vertices: [
+      { id: ids.vertexA, position: { x: offset, y: 0 } },
+      { id: ids.vertexB, position: { x: 120 + offset, y: 0 } },
+      { id: ids.vertexC, position: { x: 60 + offset, y: 90 } },
+    ],
+    segments: [
+      {
+        id: ids.segmentA,
+        startVertexId: ids.vertexA,
+        endVertexId: ids.vertexB,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
+      },
+      {
+        id: ids.segmentB,
+        startVertexId: ids.vertexB,
+        endVertexId: ids.vertexC,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
+      },
+      {
+        id: ids.segmentC,
+        startVertexId: ids.vertexC,
+        endVertexId: ids.vertexA,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
+      },
+    ],
+  };
+}
+
+function createPathCommand(parentId: string | null = ids.frame) {
+  return {
+    kind: 'create-path' as const,
+    pageId: ids.page1,
+    parentId,
+    index: 0,
+    path: {
+      id: ids.path,
+      name: 'Path',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 24, 28],
+      network: pathNetwork(),
+      fillRule: 'nonzero' as const,
+      fill: { type: 'solid' as const, r: 0.18, g: 0.45, b: 0.95, a: 1 },
+      stroke: null,
+    },
+  };
+}
+
 test('creates an empty Frame then a nested Rectangle through intention-level commands', () => {
   const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
   const afterFrame = documentFromContent(initialDocument(), frame, 1);
@@ -359,6 +420,147 @@ test('creates a detached Text leaf with validated typography fields', () => {
   expect(result.value.nodes[0]).toMatchObject({
     fontFamilies: ['Inter', 'system-ui'],
     fill: { r: 0.1 },
+  });
+});
+
+test('creates a detached nested Path through one intention-level command', () => {
+  const frame = unwrap(planCommand(initialDocument(), createFrameCommand() as never));
+  const afterFrame = documentFromContent(initialDocument(), frame, 1);
+  const command = createPathCommand();
+  const result = planCommand(afterFrame, command as never);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: {
+      nodes: [
+        { id: ids.frame, childIds: [ids.path] },
+        {
+          id: ids.path,
+          type: 'path',
+          parentId: ids.frame,
+        },
+      ],
+    },
+  });
+  command.path.network.vertices[0]!.position.x = 999;
+  command.path.fill.r = 1;
+  if (!result.ok || result.value.nodes[1]?.type !== 'path') return;
+  expect(String(result.value.nodes[1].network.segments[0]?.id)).toBe(ids.segmentA);
+  expect(result.value.nodes[1].network.vertices[0]?.position.x).toBe(0);
+  expect(result.value.nodes[1].fill?.r).toBe(0.18);
+});
+
+test('replaces one Path network atomically with stable errors and no-change detection', () => {
+  const created = unwrap(planCommand(initialDocument(), createPathCommand(null) as never));
+  const before = documentFromContent(initialDocument(), created, 1);
+  const command = { kind: 'set-path-network' as const, nodeId: ids.path, network: pathNetwork(12) };
+  const result = planCommand(before, command as never);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: { nodes: [{ type: 'path' }] },
+  });
+  command.network.vertices[0]!.position.x = 999;
+  if (!result.ok || result.value.nodes[0]?.type !== 'path') return;
+  expect(result.value.nodes[0].network.vertices[0]?.position.x).toBe(12);
+
+  const after = documentFromContent(before, result.value, 2);
+  expect(
+    planCommand(after, {
+      kind: 'set-path-network',
+      nodeId: ids.path,
+      network: pathNetwork(12),
+    } as never),
+  ).toEqual({ ok: false, error: { code: 'command.no-change', path: '/' } });
+
+  const malformed = pathNetwork(20);
+  (malformed.segments[0] as { endVertexId: string }).endVertexId = ids.frame;
+  expect(
+    planCommand(before, {
+      kind: 'set-path-network',
+      nodeId: ids.path,
+      network: malformed,
+    } as never),
+  ).toEqual({
+    ok: false,
+    error: { code: 'path.vertex-missing', path: '/network/segments/0/endVertexId' },
+  });
+  expect(before.nodes[0]?.type).toBe('path');
+  if (before.nodes[0]?.type !== 'path') return;
+  expect(before.nodes[0].network.vertices[0]?.position.x).toBe(0);
+});
+
+test('patches Path paints while rejecting rectangle-only dimensions', () => {
+  const created = unwrap(planCommand(initialDocument(), createPathCommand(null) as never));
+  const before = documentFromContent(initialDocument(), created, 1);
+  const command = {
+    kind: 'set-node-properties' as const,
+    nodeIds: [ids.path],
+    patch: {
+      fill: null,
+      stroke: {
+        paint: { type: 'solid' as const, r: 0.1, g: 0.2, b: 0.3, a: 1 },
+        width: 3,
+      },
+    },
+  };
+  const result = planCommand(before, command);
+
+  expect(result).toMatchObject({
+    ok: true,
+    value: { nodes: [{ type: 'path', fill: null, stroke: { width: 3 } }] },
+  });
+  command.patch.stroke.paint.r = 1;
+  if (!result.ok || result.value.nodes[0]?.type !== 'path') return;
+  expect(result.value.nodes[0].stroke?.paint.r).toBe(0.1);
+
+  expect(
+    planCommand(before, {
+      kind: 'set-node-properties',
+      nodeIds: [ids.path],
+      patch: { width: 100 },
+    }),
+  ).toEqual({
+    ok: false,
+    error: { code: 'command.property-unsupported', path: '/patch/width' },
+  });
+});
+
+test('rejects Path authoring through locked, hidden, and inactive targets', () => {
+  const created = unwrap(planCommand(initialDocument(), createPathCommand(null) as never));
+  const before = documentFromContent(initialDocument(), created, 1);
+  const replacement = {
+    kind: 'set-path-network' as const,
+    nodeId: ids.path,
+    network: pathNetwork(12),
+  };
+  const locked = unwrap(
+    validateDocument({
+      ...before,
+      nodes: before.nodes.map((node) => ({ ...node, locked: true })),
+    }),
+  );
+  expect(planCommand(locked, replacement as never)).toEqual({
+    ok: false,
+    error: { code: 'node.locked', path: '/nodes/0/locked' },
+  });
+  const hidden = unwrap(
+    validateDocument({
+      ...before,
+      nodes: before.nodes.map((node) => ({ ...node, visible: false })),
+    }),
+  );
+  expect(planCommand(hidden, replacement as never)).toEqual({
+    ok: false,
+    error: { code: 'node.hidden', path: '/nodes/0/visible' },
+  });
+  const addedPage = unwrap(
+    planCommand(before, { kind: 'create-page', id: ids.page2, name: 'Page 2', index: 1 }),
+  );
+  const inactive = documentFromContent(before, addedPage, 2);
+  expect(planCommand(inactive, replacement as never)).toEqual({
+    ok: false,
+    error: { code: 'command.source-page-mismatch', path: '/nodeId' },
   });
 });
 

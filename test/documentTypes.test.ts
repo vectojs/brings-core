@@ -592,6 +592,25 @@ test('publishes JSON-compatible layer and property command inputs', () => {
       group: { id: ids.group, name: 'Group' },
     },
     { kind: 'ungroup-node', nodeId: ids.group },
+    {
+      kind: 'create-path',
+      pageId: ids.page,
+      parentId: ids.frame,
+      index: 0,
+      path: {
+        id: ids.path,
+        name: 'Path',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        transform: [1, 0, 0, 1, 0, 0],
+        network: closedPathNetwork(),
+        fillRule: 'nonzero',
+        fill: null,
+        stroke: null,
+      },
+    },
+    { kind: 'set-path-network', nodeId: ids.path, network: closedPathNetwork() },
   ];
 
   expect(commands.map((command) => command.kind)).toEqual([
@@ -599,5 +618,7 @@ test('publishes JSON-compatible layer and property command inputs', () => {
     'move-nodes',
     'group-nodes',
     'ungroup-node',
+    'create-path',
+    'set-path-network',
   ]);
 });

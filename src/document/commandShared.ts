@@ -159,6 +159,19 @@ export function firstLocked(
   return success(undefined);
 }
 
+export function firstHidden(
+  content: DocumentContent,
+  protectedIds: ReadonlySet<string>,
+): Result<void> {
+  for (let index = 0; index < content.nodes.length; index += 1) {
+    const node = content.nodes[index]!;
+    if (protectedIds.has(node.id) && !node.visible) {
+      return failure('node.hidden', `/nodes/${index}/visible`);
+    }
+  }
+  return success(undefined);
+}
+
 export function replaceContainerChildren(
   nodes: readonly SceneNode[],
   containerId: NodeId,

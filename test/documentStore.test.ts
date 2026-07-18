@@ -13,6 +13,13 @@ const ids = {
   group: '88888888-8888-4888-8888-888888888888',
   text: '99999999-9999-4999-8999-999999999999',
   ellipse: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  path: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  vertexA: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+  vertexB: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+  vertexC: '11111111-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
+  segmentA: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+  segmentB: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb2',
+  segmentC: '22222222-bbbb-4bbb-8bbb-bbbbbbbbbbb3',
 } as const;
 
 function unwrap<T>(result: { ok: true; value: T } | { ok: false; error: unknown }): T {
@@ -92,6 +99,39 @@ function insertFrameWithSibling(secondRectangleLocked = false) {
         name: 'Second Rectangle',
         locked: secondRectangleLocked,
         transform: [1, 0, 0, 1, 160, 20] as const,
+      },
+    ],
+  };
+}
+
+function pathNetwork(offset = 0) {
+  return {
+    vertices: [
+      { id: ids.vertexA, position: { x: offset, y: 0 } },
+      { id: ids.vertexB, position: { x: 120 + offset, y: 0 } },
+      { id: ids.vertexC, position: { x: 60 + offset, y: 90 } },
+    ],
+    segments: [
+      {
+        id: ids.segmentA,
+        startVertexId: ids.vertexA,
+        endVertexId: ids.vertexB,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
+      },
+      {
+        id: ids.segmentB,
+        startVertexId: ids.vertexB,
+        endVertexId: ids.vertexC,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
+      },
+      {
+        id: ids.segmentC,
+        startVertexId: ids.vertexC,
+        endVertexId: ids.vertexA,
+        startControl: { x: 0, y: 0 },
+        endControl: { x: 0, y: 0 },
       },
     ],
   };
@@ -303,6 +343,77 @@ test('records Ellipse creation as one undoable intention', () => {
     {},
     { id: ids.ellipse, type: 'ellipse' },
   ]);
+});
+
+test('records Path creation and network replacement as detached undoable intentions', () => {
+  const store = createStore();
+  const create = {
+    kind: 'create-path' as const,
+    pageId: ids.page1,
+    parentId: null,
+    index: 0,
+    path: {
+      id: ids.path,
+      name: 'Path',
+      visible: true,
+      locked: false,
+      opacity: 1,
+      transform: [1, 0, 0, 1, 20, 30],
+      network: pathNetwork(),
+      fillRule: 'nonzero' as const,
+      fill: { type: 'solid' as const, r: 0.2, g: 0.45, b: 1, a: 1 },
+      stroke: null,
+    },
+  };
+  expect(store.execute(create as never).ok).toBe(true);
+  expect(store.setSelection({ nodeIds: [ids.path], activeNodeId: ids.path }).ok).toBe(true);
+
+  const replacement = pathNetwork(16);
+  expect(
+    store.execute({ kind: 'set-path-network', nodeId: ids.path, network: replacement } as never).ok,
+  ).toBe(true);
+  replacement.vertices[0]!.position.x = 999;
+  expect(store.snapshot()).toMatchObject({
+    document: { revision: 2 },
+    selection: { nodeIds: [ids.path], activeNodeId: ids.path },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+  const replaced = store.snapshot().document.nodes[0];
+  expect(replaced?.type).toBe('path');
+  if (replaced?.type !== 'path') return;
+  expect(replaced.network.vertices[0]?.position.x).toBe(16);
+
+  const beforeNoChange = JSON.stringify(store.snapshot());
+  expect(
+    store.execute({
+      kind: 'set-path-network',
+      nodeId: ids.path,
+      network: pathNetwork(16),
+    } as never),
+  ).toEqual({ ok: false, error: { code: 'command.no-change', path: '/' } });
+  expect(JSON.stringify(store.snapshot())).toBe(beforeNoChange);
+
+  expect(store.undo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    selection: { nodeIds: [ids.path], activeNodeId: ids.path },
+    undoDepth: 1,
+    redoDepth: 1,
+  });
+  const undone = store.snapshot().document.nodes[0];
+  expect(undone?.type).toBe('path');
+  if (undone?.type !== 'path') return;
+  expect(undone.network.vertices[0]?.position.x).toBe(0);
+  expect(store.redo().ok).toBe(true);
+  expect(store.snapshot()).toMatchObject({
+    selection: { nodeIds: [ids.path], activeNodeId: ids.path },
+    undoDepth: 2,
+    redoDepth: 0,
+  });
+  const redone = store.snapshot().document.nodes[0];
+  expect(redone?.type).toBe('path');
+  if (redone?.type !== 'path') return;
+  expect(redone.network.vertices[0]?.position.x).toBe(16);
 });
 
 test('normalizes ephemeral selection without changing durable state or history', () => {

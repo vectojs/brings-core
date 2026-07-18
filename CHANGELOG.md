@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.15.0
 
 ### Minor Changes
 
-- Add validated Path networks with stable vertices and cubic segments, atomic
-  `create-path` and `set-path-network` commands, exact transformed curve bounds,
-  adaptive fill and stroke hit testing, resize and alignment integration, and
-  public renderer-independent Path traversal and geometry helpers.
+- feb5c53: Add validated Path networks, atomic Path creation and replacement
+  commands, exact cubic bounds, adaptive hit geometry, resize and alignment
+  integration, and public renderer-independent Path helpers.
 
 ## 0.14.0
 

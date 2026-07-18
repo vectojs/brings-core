@@ -7,6 +7,7 @@ import {
   commandIndex,
   commitCandidate,
   failure,
+  firstHidden,
   firstLocked,
   isContainer,
   nodeMap,
@@ -19,7 +20,13 @@ import {
   withPagesAndNodes,
   withParent,
 } from './commandShared';
-import { groupNodes, moveNodes, setNodeProperties, ungroupNode } from './nodeCommands';
+import {
+  groupNodes,
+  moveNodes,
+  setNodeProperties,
+  setPathNetwork,
+  ungroupNode,
+} from './nodeCommands';
 import type {
   BringsDocument,
   DocumentCommandInput,
@@ -272,6 +279,40 @@ function createEllipse(
   });
 }
 
+function createPath(
+  before: BringsDocument,
+  command: Extract<DocumentCommandInput, { kind: 'create-path' }>,
+): Result<DocumentContent> {
+  const pageId = commandId(command.pageId, '/pageId');
+  if (!pageId.ok) return pageId;
+  if (pageId.value !== before.activePageId) {
+    return failure('command.destination-page-mismatch', '/pageId');
+  }
+  if (command.parentId !== null) {
+    const parentId = commandId(command.parentId, '/parentId');
+    if (!parentId.ok) return parentId;
+    const parent = nodeMap(before).get(parentId.value);
+    if (parent === undefined) return failure('node.not-found', '/parentId');
+    if (pageForNode(before, parent.node.id) !== before.activePageId) {
+      return failure('command.destination-page-mismatch', '/parentId');
+    }
+    if (!isContainer(parent.node)) return failure('node.destination-not-container', '/parentId');
+    const protectedIds = ancestorIds(before, parent.node.id);
+    const locked = firstLocked(before, protectedIds);
+    if (!locked.ok) return locked;
+    const hidden = firstHidden(before, protectedIds);
+    if (!hidden.ok) return hidden;
+  }
+  return insertSubtree(before, {
+    kind: 'insert-subtree',
+    pageId: command.pageId,
+    parentId: command.parentId,
+    index: command.index,
+    rootId: command.path.id,
+    nodes: [{ ...command.path, type: 'path', parentId: null }],
+  });
+}
+
 function createText(
   before: BringsDocument,
   command: Extract<DocumentCommandInput, { kind: 'create-text' }>,
@@ -516,6 +557,8 @@ export function planCommand(
       return createRectangle(before, command);
     case 'create-ellipse':
       return createEllipse(before, command);
+    case 'create-path':
+      return createPath(before, command);
     case 'create-text':
       return createText(before, command);
     case 'insert-subtree':
@@ -534,6 +577,8 @@ export function planCommand(
       return groupNodes(before, command);
     case 'ungroup-node':
       return ungroupNode(before, command);
+    case 'set-path-network':
+      return setPathNetwork(before, command);
     default:
       return failure('command.kind', '/kind');
   }

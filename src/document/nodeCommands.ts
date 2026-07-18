@@ -5,6 +5,7 @@ import {
   commandIndex,
   commitCandidate,
   failure,
+  firstHidden,
   firstLocked,
   isContainer,
   nodeMap,
@@ -15,7 +16,7 @@ import {
   withParent,
 } from './commandShared';
 import { invertMatrix, multiplyMatrices, pageMatrixForNode } from '../geometry/matrix';
-import { validateMatrixInput } from './validate';
+import { validateDetachedSubtree, validateMatrixInput } from './validate';
 import type {
   BringsDocument,
   DocumentContent,
@@ -26,6 +27,7 @@ import type {
   PageId,
   Result,
   SceneNode,
+  SetPathNetworkCommand,
   SetNodePropertiesCommand,
   UngroupNodeCommand,
 } from './types';
@@ -84,20 +86,26 @@ function supportsProperty(node: SceneNode, key: PropertyKey, value: unknown): bo
       return true;
     case 'width':
     case 'height':
-      return node.type !== 'group';
+      return node.type !== 'group' && node.type !== 'path';
     case 'cornerRadii':
       return node.type === 'frame' || node.type === 'rectangle';
     case 'fill':
       return (
         node.type === 'rectangle' ||
         node.type === 'ellipse' ||
+        node.type === 'path' ||
         (node.type === 'text' && value !== null)
       );
     case 'background':
     case 'clipChildren':
       return node.type === 'frame';
     case 'stroke':
-      return node.type === 'frame' || node.type === 'rectangle' || node.type === 'ellipse';
+      return (
+        node.type === 'frame' ||
+        node.type === 'rectangle' ||
+        node.type === 'ellipse' ||
+        node.type === 'path'
+      );
     case 'content':
     case 'fontFamilies':
     case 'fontWeight':
@@ -233,6 +241,57 @@ export function setNodeProperties(
   if (!committed.ok) return patchError(committed, targets.value);
   if (contentMatchesDocument(committed.value, before)) return failure('command.no-change', '/');
   return committed;
+}
+
+function remapDetachedPathError(result: Result<readonly SceneNode[]>): Result<never> {
+  if (result.ok) return failure('command.invalid', '/');
+  const prefix = '/nodes/0';
+  return result.error.path.startsWith(prefix)
+    ? failure(result.error.code, result.error.path.slice(prefix.length) || '/')
+    : result;
+}
+
+/** Replace one Path network after validating the complete resulting Path atomically. */
+export function setPathNetwork(
+  before: BringsDocument,
+  command: SetPathNetworkCommand,
+): Result<DocumentContent> {
+  const nodeId = commandId(command.nodeId, '/nodeId');
+  if (!nodeId.ok) return nodeId;
+  const target = nodeMap(before).get(nodeId.value);
+  if (target === undefined) return failure('node.not-found', '/nodeId');
+  if (pageForNode(before, target.node.id) !== before.activePageId) {
+    return failure('command.source-page-mismatch', '/nodeId');
+  }
+  if (target.node.type !== 'path') return failure('node.not-path', '/nodeId');
+
+  const protectedIds = ancestorIds(before, target.node.id);
+  const locked = firstLocked(before, protectedIds);
+  if (!locked.ok) return locked;
+  const hidden = firstHidden(before, protectedIds);
+  if (!hidden.ok) return hidden;
+
+  const validated = validateDetachedSubtree(
+    [{ ...cloneNode(target.node), parentId: null, network: command.network }],
+    command.nodeId,
+  );
+  if (!validated.ok) return remapDetachedPathError(validated);
+  const replacement = validated.value[0];
+  if (replacement?.type !== 'path') return failure('node.not-path', '/nodeId');
+  if (JSON.stringify(replacement.network) === JSON.stringify(target.node.network)) {
+    return failure('command.no-change', '/');
+  }
+
+  const nodes = before.nodes.map((node) =>
+    node.id === target.node.id ? withParent(replacement, target.node.parentId) : cloneNode(node),
+  );
+  return commitCandidate(before, {
+    name: before.name,
+    pageOrder: [...before.pageOrder],
+    activePageId: before.activePageId,
+    pages: before.pages.map((page) => ({ ...page, rootNodeIds: [...page.rootNodeIds] })),
+    nodes,
+  });
 }
 
 function validateHierarchyOverlap(

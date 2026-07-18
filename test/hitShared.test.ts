@@ -132,6 +132,62 @@ test('preserves centered ellipse strokes and measured text boxes', () => {
   });
 });
 
+test('prepares exact cubic Path bounds with centered stroke expansion', () => {
+  const path = validatedNode({
+    id: '77777777-7777-4777-8777-777777777777',
+    type: 'path',
+    name: 'Path',
+    parentId: null,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    transform: [1, 0, 0, 1, 0, 0],
+    network: {
+      vertices: [
+        {
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+          position: { x: 100, y: 0 },
+        },
+      ],
+      segments: [
+        {
+          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+          startVertexId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+          endVertexId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+          startControl: { x: 0, y: 100 },
+          endControl: { x: 0, y: 100 },
+        },
+      ],
+    },
+    fillRule: 'nonzero',
+    fill: null,
+    stroke: { paint, width: 4 },
+  });
+  const prepared = prepareSelectionCandidate(path, path.transform, 4);
+
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok || prepared.value === null) return;
+  expect(prepared.value.pageBounds).toEqual({ minX: -2, minY: -2, maxX: 102, maxY: 77 });
+  expect(prepared.value.silhouette.kind).toBe('path');
+  expect(Object.isFrozen(prepared.value.silhouette)).toBe(true);
+  if (prepared.value.silhouette.kind === 'path') {
+    expect(Object.isFrozen(prepared.value.silhouette.components)).toBe(true);
+    expect(Object.isFrozen(prepared.value.silhouette.components[0]?.points)).toBe(true);
+  }
+  expect(preparedCandidateIntersects(prepared.value, rectanglePolygon(50, 77, 0, 0))).toEqual({
+    ok: true,
+    value: true,
+  });
+  expect(preparedCandidateIntersects(prepared.value, rectanglePolygon(50, 78, 0, 0))).toEqual({
+    ok: true,
+    value: false,
+  });
+});
+
 test('detaches and freezes prepared ellipse geometry from mutable source aliases', () => {
   const ellipse = validatedNode({
     id: FIXTURE_IDS.ellipse,

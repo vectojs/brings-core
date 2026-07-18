@@ -10,6 +10,7 @@ import type {
 } from '../document/types';
 import { polygonBounds, rectanglePolygon, transformPolygon } from './intersection';
 import { multiplyMatrices, pageMatrixForNode } from './matrix';
+import { pathNetworkBounds } from './path';
 import {
   prepareSelectionResize,
   type ResizeBounds,
@@ -165,6 +166,10 @@ function nodeModelBounds(
     return bounds === null
       ? failure('resize.bounds-empty', `/nodes/${indices.get(node.id) ?? 0}/childIds`)
       : success(bounds);
+  }
+
+  if (node.type === 'path') {
+    return pathNetworkBounds(node.network, resolvedPageMatrix.value, path);
   }
 
   const polygon = transformPolygon(

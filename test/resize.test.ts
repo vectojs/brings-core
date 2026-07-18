@@ -14,6 +14,7 @@ const IDS = {
   nestedGroup: '88888888-8888-4888-8888-888888888888',
   sibling: '99999999-9999-4999-8999-999999999999',
   otherPage: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  path: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
 } as const;
 
 function rectangle(overrides: Partial<SceneNodeInput> = {}): SceneNodeInput {
@@ -135,6 +136,53 @@ test('derives recursive Group and multi-root model bounds through nested transfo
   );
   expect(multiple.bounds).toEqual({ minX: 20, minY: 40, maxX: 120, maxY: 80 });
   expect(multiple.selection.nodeIds.map(String)).toEqual([IDS.group, IDS.sibling]);
+});
+
+test('uses exact transformed cubic extrema for Path resize bounds', () => {
+  const document = validatedDocument(
+    [
+      {
+        id: IDS.path,
+        type: 'path',
+        name: 'Path',
+        parentId: null,
+        visible: true,
+        locked: false,
+        opacity: 1,
+        transform: [2, 0, 0, 3, 10, 20],
+        network: {
+          vertices: [
+            {
+              id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+              position: { x: 0, y: 0 },
+            },
+            {
+              id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+              position: { x: 100, y: 0 },
+            },
+          ],
+          segments: [
+            {
+              id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+              startVertexId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+              endVertexId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+              startControl: { x: 0, y: 100 },
+              endControl: { x: 0, y: 100 },
+            },
+          ],
+        },
+        fillRule: 'nonzero',
+        fill: null,
+        stroke: { paint: { type: 'solid', r: 0, g: 0, b: 0, a: 1 }, width: 20 },
+      } as SceneNodeInput,
+    ],
+    [IDS.path],
+  );
+  const prepared = unwrap(
+    prepareSelectionResize(document, { nodeIds: [IDS.path], activeNodeId: IDS.path }),
+  );
+
+  expect(prepared.bounds).toEqual({ minX: 10, minY: 20, maxX: 210, maxY: 245 });
 });
 
 test('uses a Frame own model box instead of recursively expanding to overflowing children', () => {

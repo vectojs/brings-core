@@ -4,6 +4,8 @@ import type {
   FrameNode,
   Matrix,
   Page,
+  PathNetwork,
+  PathPoint,
   Radii,
   SceneNode,
   SolidPaint,
@@ -33,6 +35,30 @@ function cloneStroke(stroke: Stroke | null): Stroke | null {
 
 function clonePage(page: Page): Page {
   return { id: page.id, name: page.name, rootNodeIds: [...page.rootNodeIds] };
+}
+
+function clonePathPoint(point: PathPoint): PathPoint {
+  return { x: point.x, y: point.y };
+}
+
+function clonePathNetwork(network: PathNetwork): PathNetwork {
+  return {
+    vertices: network.vertices.map((vertex) => ({
+      id: vertex.id,
+      position: clonePathPoint(vertex.position),
+    })) as [
+      PathNetwork['vertices'][number],
+      PathNetwork['vertices'][number],
+      ...PathNetwork['vertices'][number][],
+    ],
+    segments: network.segments.map((segment) => ({
+      id: segment.id,
+      startVertexId: segment.startVertexId,
+      endVertexId: segment.endVertexId,
+      startControl: clonePathPoint(segment.startControl),
+      endControl: clonePathPoint(segment.endControl),
+    })) as [PathNetwork['segments'][number], ...PathNetwork['segments'][number][]],
+  };
 }
 
 /** Return a detached copy of one validated scene node. */
@@ -84,6 +110,15 @@ export function cloneNode(node: SceneNode): SceneNode {
         type: 'ellipse',
         width: node.width,
         height: node.height,
+        fill: cloneOptionalPaint(node.fill),
+        stroke: cloneStroke(node.stroke),
+      };
+    case 'path':
+      return {
+        ...common,
+        type: 'path',
+        network: clonePathNetwork(node.network),
+        fillRule: node.fillRule,
         fill: cloneOptionalPaint(node.fill),
         stroke: cloneStroke(node.stroke),
       };
